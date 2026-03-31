@@ -1,6 +1,14 @@
-import { Links, Meta, Outlet, Scripts, ScrollRestoration } from "react-router";
+import { authenticate } from "./shopify.server";
+export const loader = async ({ request }) => {
+  await authenticate.admin(request);
+  return { apiKey: process.env.SHOPIFY_API_KEY || "" };
+};
+
+import { Links, Meta, Outlet, Scripts, ScrollRestoration, useLoaderData } from "react-router";
+import { AppProvider } from "@shopify/shopify-app-react-router/react";
 
 export default function App() {
+  const { apiKey } = useLoaderData ? useLoaderData() : { apiKey: undefined };
   return (
     <html lang="en">
       <head>
@@ -15,7 +23,9 @@ export default function App() {
         <Links />
       </head>
       <body>
-        <Outlet />
+        <AppProvider embedded apiKey={apiKey}>
+          <Outlet />
+        </AppProvider>
         <ScrollRestoration />
         <Scripts />
       </body>

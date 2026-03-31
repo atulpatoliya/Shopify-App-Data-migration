@@ -26,7 +26,7 @@ RUN npm ci --omit=dev && npm cache clean --force
 
 # Copy built app from builder stage
 COPY --from=builder /app/build ./build
-COPY --from=builder /app/prisma ./prisma
+
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/app ./app
 COPY --from=builder /app/shopify.app.toml ./shopify.app.toml

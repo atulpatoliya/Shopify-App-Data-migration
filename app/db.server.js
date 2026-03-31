@@ -1,11 +1,1 @@
-import { PrismaClient } from "@prisma/client";
-
-if (process.env.NODE_ENV !== "production") {
-  if (!global.prismaGlobal) {
-    global.prismaGlobal = new PrismaClient();
-  }
-}
-
-const prisma = global.prismaGlobal ?? new PrismaClient();
-
-export default prisma;
+// Prisma removed. This file is now empty or can be deleted if not referenced elsewhere.
