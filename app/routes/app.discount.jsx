@@ -1,333 +1,642 @@
-
-
-import { useState } from "react";
-import { useLoaderData, useNavigation } from "react-router";
+import { useMemo, useState } from "react";
+import { useLoaderData, useFetcher } from "react-router";
 import { authenticate } from "../shopify.server";
 
-// Loader to fetch products from Shopify
-// Helper to get collection IDs for selected products (for demo, not fetching real collections)
-async function getCollectionIdsForProducts() {
-  // You can implement this if you want to support collections
-  return [];
+const PRODUCTS_QUERY = `#graphql
+  query getProducts($first: Int!, $after: String) {
+    products(first: $first, after: $after) {
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+      edges {
+        node {
+          id
+          title
+          variants(first: 1) {
+            edges {
+              node {
+                id
+                price
+                compareAtPrice
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
+const VIP_AUTOMATIC_DISCOUNTS_QUERY = `#graphql
+  query vipAutomaticDiscounts($first: Int!) {
+    automaticDiscountNodes(first: $first, query: "title:VIP-AUTO-*") {
+      nodes {
+        id
+        automaticDiscount {
+          ... on DiscountAutomaticBasic {
+            title
+            status
+            startsAt
+            endsAt
+          }
+        }
+      }
+    }
+  }
+`;
+
+const CREATE_AUTOMATIC_DISCOUNT_MUTATION = `#graphql
+  mutation discountAutomaticBasicCreate($automaticBasicDiscount: DiscountAutomaticBasicInput!) {
+    discountAutomaticBasicCreate(automaticBasicDiscount: $automaticBasicDiscount) {
+      userErrors {
+        field
+        message
+      }
+      automaticDiscountNode {
+        id
+      }
+    }
+  }
+`;
+
+const SEGMENTS_QUERY = `#graphql
+  query segments($first: Int!, $query: String!) {
+    segments(first: $first, query: $query) {
+      nodes {
+        id
+        name
+        query
+      }
+    }
+  }
+`;
+
+const PRODUCT_BY_ID_QUERY = `#graphql
+  query productById($id: ID!) {
+    product(id: $id) {
+      id
+      title
+      variants(first: 1) {
+        edges {
+          node {
+            price
+            compareAtPrice
+          }
+        }
+      }
+    }
+  }
+`;
+
+function toNumber(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
 }
 
-export const action = async ({ request }) => {
-  const { admin } = await authenticate.admin(request);
-  const formData = await request.formData();
-  const discounts = JSON.parse(formData.get("discounts"));
-  const code = formData.get("discount_code") || `DISCOUNT-${Date.now()}`;
-  const discountType = formData.get("discount_type") || "percentage";
-  const isAutomatic = formData.get("automatic") === "on";
-  const startsAt = formData.get("starts_at") || new Date().toISOString();
-  const endsAt = formData.get("ends_at") || null;
-  const usageLimit = formData.get("usage_limit") ? parseInt(formData.get("usage_limit")) : null;
-  const perCustomerLimit = formData.get("per_customer_limit") ? parseInt(formData.get("per_customer_limit")) : null;
-  const appliesTo = formData.get("applies_to") || "products";
-  const productIds = Object.keys(discounts);
-  let collectionIds = [];
-  if (appliesTo === "collections") {
-    collectionIds = await getCollectionIdsForProducts(productIds, admin);
+function normalizeSegmentGid(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  if (raw.startsWith("gid://shopify/Segment/")) return raw;
+  if (/^\d+$/.test(raw)) return `gid://shopify/Segment/${raw}`;
+  return raw;
+}
+
+function computeTargetAndFixedDiscount(price, compareAtPrice, percent) {
+  const currentPrice = toNumber(price);
+  const compareAt = toNumber(compareAtPrice);
+
+  const hasCompareAt = compareAt > 0;
+  const basePrice = hasCompareAt ? compareAt : currentPrice;
+  const targetPrice = basePrice * (1 - percent / 100);
+
+  if (hasCompareAt) {
+    const existingDiscountPercent = ((compareAt - currentPrice) / compareAt) * 100;
+    if (existingDiscountPercent >= percent) {
+      return {
+        shouldApply: false,
+        reason: `Existing discount (${existingDiscountPercent.toFixed(2)}%) >= ${percent}%`,
+        targetPrice,
+        fixedAmount: 0,
+      };
+    }
   }
-  const discountValue = parseFloat(discounts[productIds[0]]); // For demo, use first discount value
-  // Build the mutation and variables
-  let mutation, variables;
-  if (isAutomatic) {
-    mutation = `#graphql
-      mutation discountAutomaticBasicCreate($automaticAppDiscount: DiscountAutomaticBasicInput!) {
-        discountAutomaticBasicCreate(automaticAppDiscount: $automaticAppDiscount) {
-          userErrors { field message }
-          automaticAppDiscount { id }
-        }
-      }
-    `;
-    variables = {
-      automaticAppDiscount: {
-        title: code,
-        startsAt,
-        endsAt,
-        customerGets: {
-          value: discountType === "percentage"
-            ? { percentage: { value: discountValue } }
-            : { fixedAmount: { value: discountValue, appliesOnEachItem: true } },
-          items:
-            appliesTo === "products"
-              ? { products: productIds }
-              : appliesTo === "collections"
-              ? { collections: collectionIds }
-              : { all: true },
-        },
-        appliesOncePerCustomer: !!perCustomerLimit,
-        usageLimit: usageLimit,
-        combinesWith: { orderDiscounts: true, productDiscounts: false, shippingDiscounts: false },
-      },
-    };
-  } else {
-    mutation = `#graphql
-      mutation discountCodeBasicCreate($basicCodeDiscount: DiscountCodeBasicInput!) {
-        discountCodeBasicCreate(basicCodeDiscount: $basicCodeDiscount) {
-          userErrors { field message }
-          codeDiscountNode { id }
-        }
-      }
-    `;
-    variables = {
-      basicCodeDiscount: {
-        title: code,
-        code,
-        startsAt,
-        endsAt,
-        customerGets: {
-          value: discountType === "percentage"
-            ? { percentage: { value: discountValue } }
-            : { fixedAmount: { value: discountValue, appliesOnEachItem: true } },
-          items:
-            appliesTo === "products"
-              ? { products: productIds }
-              : appliesTo === "collections"
-              ? { collections: collectionIds }
-              : { all: true },
-        },
-        appliesOncePerCustomer: !!perCustomerLimit,
-        usageLimit: usageLimit,
-        combinesWith: { orderDiscounts: true, productDiscounts: false, shippingDiscounts: false },
-      },
+
+  const fixedAmount = currentPrice - targetPrice;
+  if (fixedAmount <= 0) {
+    return {
+      shouldApply: false,
+      reason: "Already at/below target",
+      targetPrice,
+      fixedAmount: 0,
     };
   }
-  const response = await admin.graphql(mutation, { variables });
-  const json = await response.json();
-  const errors = isAutomatic
-    ? json.data.discountAutomaticBasicCreate.userErrors
-    : json.data.discountCodeBasicCreate.userErrors;
-  if (errors.length > 0) {
-    return { ok: false, errors };
-  }
-  return { ok: true, code };
-};
+
+  return {
+    shouldApply: true,
+    reason: "",
+    targetPrice,
+    fixedAmount,
+  };
+}
 
 export const loader = async ({ request }) => {
   const { admin } = await authenticate.admin(request);
   let hasNextPage = true;
   let after = null;
   const allProducts = [];
-  while (hasNextPage) {
-    const response = await admin.graphql(
-      `#graphql
-        query getProducts($first: Int!, $after: String) {
-          products(first: $first, after: $after) {
-            pageInfo { hasNextPage endCursor }
-            edges {
-              node {
-                id
-                title
-                priceRange {
-                  minVariantPrice { amount currencyCode }
-                  maxVariantPrice { amount currencyCode }
-                }
-                variants(first: 1) {
-                  edges {
-                    node {
-                      compareAtPrice
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      `,
-      { variables: { first: 100, after } }
-    );
-    const json = await response.json();
-    const pageProducts = json.data.products.edges.map((e) => e.node);
-    allProducts.push(...pageProducts);
-    hasNextPage = json.data.products.pageInfo.hasNextPage;
-    after = json.data.products.pageInfo.endCursor;
+
+  try {
+    while (hasNextPage) {
+      const response = await admin.graphql(PRODUCTS_QUERY, {
+        variables: { first: 100, after },
+      });
+
+      const json = await response.json();
+      if (json?.errors) {
+        console.error("GraphQL Error:", json.errors);
+        throw new Error(json.errors[0]?.message || "GraphQL error");
+      }
+
+      const products = json?.data?.products;
+      const pageProducts = (products?.edges || []).map((edge) => edge.node);
+      allProducts.push(...pageProducts);
+
+      hasNextPage = Boolean(products?.pageInfo?.hasNextPage);
+      after = products?.pageInfo?.endCursor || null;
+    }
+  } catch (err) {
+    console.error("Loader Error:", err.message);
+    return { products: [], error: err.message };
   }
-  // Map to simpler structure for the table
-  const products = allProducts.map((p) => ({
-    id: p.id,
-    name: p.title,
-    price: p.priceRange.minVariantPrice.amount,
-    compareAtPrice: p.variants.edges[0]?.node?.compareAtPrice || "-",
-  }));
-  return { products };
-}
+
+  const normalizedProducts = allProducts
+    .map((product) => {
+      const firstVariant = product?.variants?.edges?.[0]?.node;
+      if (!firstVariant?.id) return null;
+
+      return {
+        id: product.id,
+        name: product.title,
+        variantId: firstVariant.id,
+        price: toNumber(firstVariant.price),
+        compareAtPrice: firstVariant.compareAtPrice ? toNumber(firstVariant.compareAtPrice) : null,
+      };
+    })
+    .filter(Boolean);
+
+  const vipActiveByProduct = {};
+  try {
+    const discountResponse = await admin.graphql(VIP_AUTOMATIC_DISCOUNTS_QUERY, {
+      variables: { first: 100 },
+    });
+    const discountJson = await discountResponse.json();
+    const discountNodes = discountJson?.data?.automaticDiscountNodes?.nodes || [];
+
+    for (const node of discountNodes) {
+      const basic = node?.automaticDiscount;
+      const title = basic?.title;
+      if (!title || !title.startsWith("VIP-AUTO-")) continue;
+
+      const parts = title.split("-");
+      const productSuffix = parts[parts.length - 1];
+      if (!productSuffix) continue;
+
+      const matchedProduct = normalizedProducts.find((p) => p.id.endsWith(`/${productSuffix}`));
+      if (!matchedProduct) continue;
+
+      vipActiveByProduct[matchedProduct.id] = {
+        code: title,
+        status: basic?.status || "ACTIVE",
+        startsAt: basic?.startsAt || null,
+        endsAt: basic?.endsAt || null,
+      };
+    }
+  } catch (err) {
+    console.warn("VIP discount status load skipped:", err.message);
+  }
+
+  return { products: normalizedProducts, vipActiveByProduct };
+};
+
+export const action = async ({ request }) => {
+  try {
+    const { admin } = await authenticate.admin(request);
+    const formData = await request.formData();
+
+    const selectedProductIds = JSON.parse(formData.get("selected_products") || "[]");
+    const percentage = toNumber(formData.get("discount_percent"));
+    const vipTag = String(formData.get("vip_tag") || "vip_cutomer").trim();
+    const vipSegmentIdInput = normalizeSegmentGid(formData.get("vip_segment_id"));
+    const startsAt = formData.get("starts_at");
+    const endsAt = formData.get("ends_at");
+
+    console.log("ACTION START: Discount request received", { selectedProductIds: selectedProductIds.length, percentage });
+
+    if (!Array.isArray(selectedProductIds) || selectedProductIds.length === 0) {
+      return { ok: false, errors: [{ message: "Select at least 1 product" }] };
+    }
+
+    if (percentage <= 0 || percentage > 100) {
+      return { ok: false, errors: [{ message: "Percent must be 0-100" }] };
+    }
+
+    if (!vipTag) {
+      return { ok: false, errors: [{ message: "VIP tag is required" }] };
+    }
+
+    let vipSegmentId = vipSegmentIdInput || null;
+    const desiredSegmentName = `VIP_TAG_${vipTag}`;
+
+    if (!vipSegmentId) {
+      const searchQueries = [
+        `name:${desiredSegmentName}`,
+        `name:'${desiredSegmentName}'`,
+        vipTag,
+      ];
+
+      for (const searchQuery of searchQueries) {
+        try {
+          const segmentsResponse = await admin.graphql(SEGMENTS_QUERY, {
+            variables: { first: 250, query: searchQuery },
+          });
+          const segmentsJson = await segmentsResponse.json();
+          const existingSegment = (segmentsJson?.data?.segments?.nodes || []).find((seg) => {
+            const q = String(seg?.query || "").toLowerCase();
+            const n = String(seg?.name || "").toLowerCase();
+            const t = vipTag.toLowerCase();
+            return n === desiredSegmentName.toLowerCase() || q.includes(t) || n.includes(t);
+          });
+          if (existingSegment?.id) {
+            vipSegmentId = existingSegment.id;
+            break;
+          }
+        } catch (err) {
+          console.warn("Segment lookup failed:", err.message);
+        }
+      }
+    }
+
+    if (!vipSegmentId) {
+      return {
+        ok: false,
+        errors: [{ message: `VIP segment not found for tag '${vipTag}'. Please paste Segment ID. You can paste numeric ID from URL or full gid://shopify/Segment/... value.` }],
+      };
+    }
+
+    const applied = [];
+    const errors = [];
+    let delay = 0;
+
+    for (const productId of selectedProductIds) {
+      try {
+        // Stagger requests to avoid overloading
+        if (delay > 0) {
+          await new Promise((resolve) => setTimeout(resolve, delay));
+        }
+        delay = 200;
+
+        const productResponse = await admin.graphql(PRODUCT_BY_ID_QUERY, {
+          variables: { id: productId },
+        });
+        const productJson = await productResponse.json();
+        const productNode = productJson?.data?.product;
+        const firstVariant = productNode?.variants?.edges?.[0]?.node;
+
+        if (!firstVariant) {
+          errors.push({ message: `Product not found for ${productId}` });
+          continue;
+        }
+
+        const currentPrice = toNumber(firstVariant.price);
+        const compareAtPrice = firstVariant.compareAtPrice ? toNumber(firstVariant.compareAtPrice) : null;
+        const pricePlan = computeTargetAndFixedDiscount(currentPrice, compareAtPrice, percentage);
+
+        if (!pricePlan.shouldApply) {
+          errors.push({ message: `${productNode?.title || productId}: ${pricePlan.reason}` });
+          continue;
+        }
+
+        const effectivePercentage = currentPrice > 0 ? pricePlan.fixedAmount / currentPrice : 0;
+        if (effectivePercentage <= 0 || effectivePercentage >= 1) {
+          errors.push({ message: `${productNode?.title || productId}: invalid computed discount` });
+          continue;
+        }
+
+        const randomSuffix = Math.floor(Math.random() * 1000000);
+        const code = `VIP-AUTO-${Math.round(percentage)}-${Date.now()}-${randomSuffix}-${productId.split("/").pop()}`;
+        const startIso = startsAt ? new Date(startsAt).toISOString() : new Date().toISOString();
+        const endIso = endsAt ? new Date(endsAt).toISOString() : null;
+
+        const automaticBasicDiscount = {
+          title: code,
+          startsAt: startIso,
+          context: {
+            customerSegments: {
+              add: [vipSegmentId],
+            },
+          },
+          customerGets: {
+            value: {
+              percentage: Number(effectivePercentage.toFixed(6)),
+            },
+            items: {
+              products: {
+                productsToAdd: [productId],
+              },
+            },
+          },
+        };
+
+        if (endIso) {
+          automaticBasicDiscount.endsAt = endIso;
+        }
+
+        console.log("Creating automatic VIP discount:", code);
+
+        const response = await admin.graphql(CREATE_AUTOMATIC_DISCOUNT_MUTATION, {
+          variables: {
+            automaticBasicDiscount,
+          },
+        });
+
+        const json = await response.json();
+        console.log("Mutation response for", code, ":", json);
+
+        const userErrors = json?.data?.discountAutomaticBasicCreate?.userErrors || [];
+
+        if (userErrors.length > 0) {
+          const firstError = userErrors[0];
+          const fieldPath = Array.isArray(firstError.field) ? firstError.field.join(".") : "unknown";
+          errors.push({ code, message: `${firstError.message} (field: ${fieldPath})` });
+          continue;
+        }
+
+        applied.push({
+          code,
+          productName: productNode?.title || productId,
+          percentage,
+          vipSegmentId,
+          effectivePercentage: Number((effectivePercentage * 100).toFixed(4)),
+          targetPrice: Number(pricePlan.targetPrice.toFixed(2)),
+        });
+      } catch (err) {
+        console.error("Mutation error for product", productId, ":", err.message);
+        errors.push({ message: `Error creating discount: ${err.message}` });
+      }
+    }
+
+    console.log("ACTION COMPLETE:", { applied: applied.length, errors: errors.length });
+    return {
+      ok: errors.length === 0,
+      applied: applied,
+      errors: errors,
+    };
+  } catch (err) {
+    console.error("ACTION FATAL ERROR:", err);
+    return { ok: false, errors: [{ message: err.message }] };
+  }
+};
 
 export default function DiscountPage() {
-  const { products } = useLoaderData();
-  const navigation = useNavigation();
-  const [discounts, setDiscounts] = useState({});
-  const [discountCode, setDiscountCode] = useState("");
-  const [discountType, setDiscountType] = useState("percentage");
-  const [automatic, setAutomatic] = useState(false);
+  const { products = [], vipActiveByProduct = {}, error: loaderError } = useLoaderData() || {};
+  const fetcher = useFetcher();
+
+  const [discountPercent, setDiscountPercent] = useState("25");
+  const [vipTag, setVipTag] = useState("vip_cutomer");
+  const [vipSegmentId, setVipSegmentId] = useState("");
   const [startsAt, setStartsAt] = useState("");
   const [endsAt, setEndsAt] = useState("");
-  const [usageLimit, setUsageLimit] = useState("");
-  const [perCustomerLimit, setPerCustomerLimit] = useState("");
-  const [appliesTo, setAppliesTo] = useState("products");
-  const [applied, setApplied] = useState(null);
-  const [serverResult, setServerResult] = useState(null);
+  const [selected, setSelected] = useState({});
 
-  const handleDiscountChange = (id, value) => {
-    setDiscounts((prev) => ({ ...prev, [id]: value }));
+  const selectedIds = useMemo(
+    () => Object.keys(selected).filter((id) => selected[id]),
+    [selected],
+  );
+
+  const percent = toNumber(discountPercent);
+  const result = fetcher.data;
+
+  const toggleProduct = (productId) => {
+    setSelected((prev) => ({ ...prev, [productId]: !prev[productId] }));
   };
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    const form = e.target;
-    const formData = new FormData(form);
-    formData.set("discounts", JSON.stringify(discounts));
-    // Add advanced options
-    formData.set("discount_type", discountType);
-    if (automatic) formData.set("automatic", "on");
-    if (startsAt) formData.set("starts_at", startsAt);
-    if (endsAt) formData.set("ends_at", endsAt);
-    if (usageLimit) formData.set("usage_limit", usageLimit);
-    if (perCustomerLimit) formData.set("per_customer_limit", perCustomerLimit);
-    formData.set("applies_to", appliesTo);
-    // Submit using fetch to action
-    const res = await fetch("/app/discount", {
-      method: "POST",
-      body: formData,
-    });
-    const result = await res.json();
-    setServerResult(result);
-    if (result.ok) {
-      setApplied(
-        products
-          .filter((product) => discounts[product.id])
-          .map((product) => ({
-            name: product.name,
-            price: product.price,
-            compareAtPrice: product.compareAtPrice,
-            discount: discounts[product.id],
-          }))
-      );
+  const toggleAll = (checked) => {
+    const next = {};
+    for (const p of products) {
+      next[p.id] = checked;
     }
+    setSelected(next);
+  };
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    
+    const fd = new FormData();
+    fd.set("selected_products", JSON.stringify(selectedIds));
+    fd.set("discount_percent", discountPercent);
+    fd.set("vip_tag", vipTag);
+    if (vipSegmentId) fd.set("vip_segment_id", vipSegmentId);
+    if (startsAt) fd.set("starts_at", startsAt);
+    if (endsAt) fd.set("ends_at", endsAt);
+
+    fetcher.submit(fd, { method: "POST" });
   };
 
   return (
-    <div style={{ maxWidth: 800, margin: "2rem auto" }}>
-      <h2>Apply Discount Per Product</h2>
-      <form method="post" onSubmit={handleSubmit}>
-        <div style={{ marginBottom: 12, display: 'flex', gap: 16, flexWrap: 'wrap' }}>
-          <div>
-            <label htmlFor="discount-type">Discount Type: </label>
-            <select id="discount-type" value={discountType} onChange={e => setDiscountType(e.target.value)} name="discount_type">
-              <option value="percentage">Percentage (%)</option>
-              <option value="fixed">Fixed Amount</option>
-            </select>
-          </div>
-          <div>
-            <label htmlFor="automatic-discount">Automatic Discount: </label>
-            <input id="automatic-discount" type="checkbox" checked={automatic} onChange={e => setAutomatic(e.target.checked)} name="automatic" />
-          </div>
-          {!automatic && (
+    <div style={{ maxWidth: 1200, margin: "2rem auto", padding: "0 1rem" }}>
+      <h2>VIP Discount Manager</h2>
+      <p>Create discount codes. Applies based on compare-at price if available, else current price.</p>
+
+      {loaderError && (
+        <div style={{ marginBottom: 16, padding: 12, backgroundColor: "#ffebee", borderRadius: 4, color: "#b71c1c" }}>
+          <strong>Load error:</strong> {loaderError}
+        </div>
+      )}
+
+      <form onSubmit={handleSubmit}>
+        <fieldset style={{ border: "1px solid #ccc", padding: 16, marginBottom: 20, borderRadius: 4 }}>
+          <legend>Discount Settings</legend>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 16 }}>
             <div>
-              <label htmlFor="discount-code">Discount Code (for checkout): </label>
+              <label htmlFor="pct">Discount %</label>
               <input
-                id="discount-code"
-                type="text"
-                name="discount_code"
-                value={discountCode}
-                onChange={(e) => setDiscountCode(e.target.value)}
-                placeholder="e.g. SPRING10"
-                style={{ width: 120 }}
+                id="pct"
+                type="number"
+                min="0"
+                max="100"
+                step="0.01"
+                value={discountPercent}
+                onChange={(e) => setDiscountPercent(e.target.value)}
+                style={{ width: "100%", padding: 6 }}
               />
             </div>
-          )}
-          <div>
-            <label htmlFor="starts-at">Start Date: </label>
-            <input id="starts-at" type="datetime-local" value={startsAt} onChange={e => setStartsAt(e.target.value)} name="starts_at" />
+            <div>
+              <label htmlFor="vip-tag">VIP Customer Tag</label>
+              <input
+                id="vip-tag"
+                type="text"
+                value={vipTag}
+                onChange={(e) => setVipTag(e.target.value)}
+                style={{ width: "100%", padding: 6 }}
+              />
+            </div>
+            <div>
+              <label htmlFor="vip-segment-id">VIP Segment ID (optional)</label>
+              <input
+                id="vip-segment-id"
+                type="text"
+                placeholder="gid://shopify/Segment/..."
+                value={vipSegmentId}
+                onChange={(e) => setVipSegmentId(e.target.value)}
+                style={{ width: "100%", padding: 6 }}
+              />
+            </div>
+            <div>
+              <label htmlFor="start">Start Date</label>
+              <input
+                id="start"
+                type="datetime-local"
+                value={startsAt}
+                onChange={(e) => setStartsAt(e.target.value)}
+                style={{ width: "100%", padding: 6 }}
+              />
+            </div>
+            <div>
+              <label htmlFor="end">End Date</label>
+              <input
+                id="end"
+                type="datetime-local"
+                value={endsAt}
+                onChange={(e) => setEndsAt(e.target.value)}
+                style={{ width: "100%", padding: 6 }}
+              />
+            </div>
           </div>
-          <div>
-            <label htmlFor="ends-at">End Date: </label>
-            <input id="ends-at" type="datetime-local" value={endsAt} onChange={e => setEndsAt(e.target.value)} name="ends_at" />
-          </div>
-          <div>
-            <label htmlFor="usage-limit">Usage Limit: </label>
-            <input id="usage-limit" type="number" min="1" value={usageLimit} onChange={e => setUsageLimit(e.target.value)} name="usage_limit" style={{ width: 80 }} />
-          </div>
-          <div>
-            <label htmlFor="per-customer-limit">Per Customer Limit: </label>
-            <input id="per-customer-limit" type="number" min="1" value={perCustomerLimit} onChange={e => setPerCustomerLimit(e.target.value)} name="per_customer_limit" style={{ width: 80 }} />
-          </div>
-          <div>
-            <label htmlFor="applies-to">Applies To: </label>
-            <select id="applies-to" value={appliesTo} onChange={e => setAppliesTo(e.target.value)} name="applies_to">
-              <option value="products">Selected Products</option>
-              <option value="collections">Collections (not implemented)</option>
-              <option value="all">All Products</option>
-            </select>
-          </div>
+        </fieldset>
+
+        <div style={{ marginBottom: 12 }}>
+          <button type="button" onClick={() => toggleAll(true)} style={{ marginRight: 8, padding: "6px 12px" }}>
+            Select All
+          </button>
+          <button type="button" onClick={() => toggleAll(false)} style={{ padding: "6px 12px" }}>
+            Clear All
+          </button>
         </div>
-        <table border="1" cellPadding="8" cellSpacing="0" style={{ width: "100%", marginBottom: 16 }}>
+
+        <table border="1" cellPadding="12" cellSpacing="0" style={{ width: "100%", marginBottom: 16 }}>
           <thead>
-            <tr>
-              <th>Product Name</th>
+            <tr style={{ backgroundColor: "#f5f5f5" }}>
+              <th style={{ width: 40 }}>✓</th>
+              <th>Product</th>
               <th>Price</th>
-              <th>Compare Price</th>
-              <th>Discount (%)</th>
+              <th>Compare-at</th>
+              <th>Target @ {percent}%</th>
+              <th>Discount $</th>
+              <th>Status</th>
             </tr>
           </thead>
           <tbody>
-            {products.map((product) => (
-              <tr key={product.id}>
-                <td>{product.name}</td>
-                <td>{product.price}</td>
-                <td>{product.compareAtPrice}</td>
-                <td>
-                  <input
-                    type="number"
-                    min="0"
-                    max="100"
-                    value={discounts[product.id] || ""}
-                    onChange={(e) => handleDiscountChange(product.id, e.target.value)}
-                    style={{ width: 60 }}
-                  />
+            {products.map((p) => {
+              const calc = computeTargetAndFixedDiscount(p.price, p.compareAtPrice, percent);
+              const activeInfo = vipActiveByProduct[p.id];
+              return (
+                <tr key={p.id}>
+                  <td>
+                    <input
+                      type="checkbox"
+                      checked={Boolean(selected[p.id])}
+                      onChange={() => toggleProduct(p.id)}
+                    />
+                  </td>
+                  <td>{p.name}</td>
+                  <td>${p.price.toFixed(2)}</td>
+                  <td>${p.compareAtPrice ? p.compareAtPrice.toFixed(2) : "-"}</td>
+                  <td>${calc.targetPrice.toFixed(2)}</td>
+                  <td>${calc.fixedAmount.toFixed(2)}</td>
+                  <td>
+                    {activeInfo ? (
+                      <span style={{ color: "#0b6e4f" }}>
+                        ✓ Active ({activeInfo.code})
+                      </span>
+                    ) : (
+                      <span style={{ color: calc.shouldApply ? "green" : "red" }}>
+                        {calc.shouldApply ? "✓" : "✗"} {calc.reason || "OK"}
+                      </span>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+            {products.length === 0 && (
+              <tr>
+                <td colSpan={7} style={{ textAlign: "center", color: "#666" }}>
+                  No products loaded. Refresh app preview once, and ensure dev server is running.
                 </td>
               </tr>
-            ))}
+            )}
           </tbody>
         </table>
-        <button type="submit" disabled={navigation.state === "submitting"}>
-          {navigation.state === "submitting" ? "Applying..." : "Apply Discounts"}
+
+        <button
+          type="submit"
+          disabled={fetcher.state === "submitting" || selectedIds.length === 0}
+          style={{
+            padding: "12px 24px",
+            fontSize: 16,
+            backgroundColor: selectedIds.length === 0 ? "#ccc" : "#0066cc",
+            color: "white",
+            border: "none",
+            borderRadius: 4,
+            cursor: selectedIds.length === 0 ? "not-allowed" : "pointer",
+          }}
+        >
+          {fetcher.state === "submitting" ? "Creating..." : "Create Discount"}
         </button>
       </form>
-      {serverResult && serverResult.ok && (
-        <div style={{ marginTop: 24 }}>
-          <h3>Discount Code Created: <span style={{color:'green'}}>{serverResult.code}</span></h3>
-          <p>Customers can use this code at checkout for the selected products.</p>
-          <table border="1" cellPadding="8" cellSpacing="0" style={{ width: "100%" }}>
-            <thead>
-              <tr>
-                <th>Product Name</th>
-                <th>Price</th>
-                <th>Compare Price</th>
-                <th>Discount (%)</th>
-              </tr>
-            </thead>
-            <tbody>
-              {applied.map((item, idx) => (
-                <tr key={idx}>
-                  <td>{item.name}</td>
-                  <td>{item.price}</td>
-                  <td>{item.compareAtPrice}</td>
-                  <td>{item.discount}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-      {serverResult && serverResult.errors && (
-        <div style={{color:'red'}}>
-          <h4>Errors:</h4>
-          <ul>
-            {serverResult.errors.map((err, idx) => (
-              <li key={idx}>{err.message}</li>
-            ))}
-          </ul>
+
+      {result && (
+        <div style={{ marginTop: 32, padding: 20, backgroundColor: result.ok ? "#e8f5e9" : "#ffebee", borderRadius: 4 }}>
+          <h3>Result</h3>
+          <p style={{ marginTop: 0 }}>
+            Auto applies only for logged-in customers with tag <strong>{vipTag}</strong>.
+          </p>
+
+          {result.applied?.length > 0 && (
+            <div style={{ marginBottom: 16 }}>
+              <h4>Created ({result.applied.length}):</h4>
+              <ul>
+                {result.applied.map((item, idx) => (
+                  <li key={idx}>
+                    <code>{item.code}</code>
+                    {" "}
+                    Product: {item.productName}
+                    {" | "}
+                    Segment: {item.vipSegmentId}
+                    {" "}
+                    Requested: {item.percentage}%
+                    {" | "}
+                    Applied: {item.effectivePercentage}%
+                    {" | "}
+                    Target Price: ${item.targetPrice}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {result.errors?.length > 0 && (
+            <div>
+              <h4>Errors ({result.errors.length}):</h4>
+              <ul>
+                {result.errors.map((err, idx) => (
+                  <li key={idx} style={{ color: "red" }}>
+                    {err.code ? `${err.code}: ` : ""}{err.message}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
       )}
     </div>
