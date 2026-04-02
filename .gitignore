@@ -58,7 +58,6 @@ desktop.ini
 .cursor/
 
 # ── Docker ────────────────────────────────────────────────────
-# Dockerfile is needed for Render deployment — do NOT ignore it
 .dockerignore
 
 # ── Docs / Boilerplate ────────────────────────────────────────

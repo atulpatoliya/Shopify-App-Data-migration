@@ -2,16 +2,17 @@
 
 import { useState } from "react";
 import { useLoaderData, useNavigation } from "react-router";
+import { authenticate } from "../shopify.server";
 
 // Loader to fetch products from Shopify
 // Helper to get collection IDs for selected products (for demo, not fetching real collections)
-async function getCollectionIdsForProducts(productIds, admin) {
+async function getCollectionIdsForProducts() {
   // You can implement this if you want to support collections
   return [];
 }
 
 export const action = async ({ request }) => {
-  const { admin } = await (await import("../shopify.server")).authenticate.admin(request);
+  const { admin } = await authenticate.admin(request);
   const formData = await request.formData();
   const discounts = JSON.parse(formData.get("discounts"));
   const code = formData.get("discount_code") || `DISCOUNT-${Date.now()}`;
@@ -102,7 +103,9 @@ export const action = async ({ request }) => {
   }
   return { ok: true, code };
 };
-  const { admin } = await (await import("../shopify.server")).authenticate.admin(request);
+
+export const loader = async ({ request }) => {
+  const { admin } = await authenticate.admin(request);
   let hasNextPage = true;
   let after = null;
   const allProducts = [];
@@ -209,20 +212,21 @@ export default function DiscountPage() {
       <form method="post" onSubmit={handleSubmit}>
         <div style={{ marginBottom: 12, display: 'flex', gap: 16, flexWrap: 'wrap' }}>
           <div>
-            <label>Discount Type: </label>
-            <select value={discountType} onChange={e => setDiscountType(e.target.value)} name="discount_type">
+            <label htmlFor="discount-type">Discount Type: </label>
+            <select id="discount-type" value={discountType} onChange={e => setDiscountType(e.target.value)} name="discount_type">
               <option value="percentage">Percentage (%)</option>
               <option value="fixed">Fixed Amount</option>
             </select>
           </div>
           <div>
-            <label>Automatic Discount: </label>
-            <input type="checkbox" checked={automatic} onChange={e => setAutomatic(e.target.checked)} name="automatic" />
+            <label htmlFor="automatic-discount">Automatic Discount: </label>
+            <input id="automatic-discount" type="checkbox" checked={automatic} onChange={e => setAutomatic(e.target.checked)} name="automatic" />
           </div>
           {!automatic && (
             <div>
-              <label>Discount Code (for checkout): </label>
+              <label htmlFor="discount-code">Discount Code (for checkout): </label>
               <input
+                id="discount-code"
                 type="text"
                 name="discount_code"
                 value={discountCode}
@@ -233,24 +237,24 @@ export default function DiscountPage() {
             </div>
           )}
           <div>
-            <label>Start Date: </label>
-            <input type="datetime-local" value={startsAt} onChange={e => setStartsAt(e.target.value)} name="starts_at" />
+            <label htmlFor="starts-at">Start Date: </label>
+            <input id="starts-at" type="datetime-local" value={startsAt} onChange={e => setStartsAt(e.target.value)} name="starts_at" />
           </div>
           <div>
-            <label>End Date: </label>
-            <input type="datetime-local" value={endsAt} onChange={e => setEndsAt(e.target.value)} name="ends_at" />
+            <label htmlFor="ends-at">End Date: </label>
+            <input id="ends-at" type="datetime-local" value={endsAt} onChange={e => setEndsAt(e.target.value)} name="ends_at" />
           </div>
           <div>
-            <label>Usage Limit: </label>
-            <input type="number" min="1" value={usageLimit} onChange={e => setUsageLimit(e.target.value)} name="usage_limit" style={{ width: 80 }} />
+            <label htmlFor="usage-limit">Usage Limit: </label>
+            <input id="usage-limit" type="number" min="1" value={usageLimit} onChange={e => setUsageLimit(e.target.value)} name="usage_limit" style={{ width: 80 }} />
           </div>
           <div>
-            <label>Per Customer Limit: </label>
-            <input type="number" min="1" value={perCustomerLimit} onChange={e => setPerCustomerLimit(e.target.value)} name="per_customer_limit" style={{ width: 80 }} />
+            <label htmlFor="per-customer-limit">Per Customer Limit: </label>
+            <input id="per-customer-limit" type="number" min="1" value={perCustomerLimit} onChange={e => setPerCustomerLimit(e.target.value)} name="per_customer_limit" style={{ width: 80 }} />
           </div>
           <div>
-            <label>Applies To: </label>
-            <select value={appliesTo} onChange={e => setAppliesTo(e.target.value)} name="applies_to">
+            <label htmlFor="applies-to">Applies To: </label>
+            <select id="applies-to" value={appliesTo} onChange={e => setAppliesTo(e.target.value)} name="applies_to">
               <option value="products">Selected Products</option>
               <option value="collections">Collections (not implemented)</option>
               <option value="all">All Products</option>

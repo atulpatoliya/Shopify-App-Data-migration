@@ -307,7 +307,7 @@ export default function ImportPage() {
               <s-banner title="No matches found" tone="warning">
                 None of the rows matched existing Shopify products by{" "}
                 <strong>{matchOption.label}</strong>. Try a different match field
-                or check your file's column names and values.
+                or check your file&apos;s column names and values.
               </s-banner>
             )}
 

@@ -1,14 +1,14 @@
-import { authenticate } from "./shopify.server";
+import { appApiKey, authenticate } from "./shopify.server";
 export const loader = async ({ request }) => {
   await authenticate.admin(request);
-  return { apiKey: process.env.SHOPIFY_API_KEY || "" };
+  return { apiKey: appApiKey };
 };
 
 import { Links, Meta, Outlet, Scripts, ScrollRestoration, useLoaderData } from "react-router";
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
 
 export default function App() {
-  const { apiKey } = useLoaderData ? useLoaderData() : { apiKey: undefined };
+  const { apiKey } = useLoaderData();
   return (
     <html lang="en">
       <head>

@@ -6,9 +6,10 @@ import {
   shopifyApp,
 } from "@shopify/shopify-app-react-router/server";
 
+export const appApiKey = process.env.SHOPIFY_API_KEY || "";
 
 const shopify = shopifyApp({
-  apiKey: process.env.SHOPIFY_API_KEY,
+  apiKey: appApiKey,
   apiSecretKey: process.env.SHOPIFY_API_SECRET || "",
   apiVersion: ApiVersion.October25,
   scopes: process.env.SCOPES?.split(","),
