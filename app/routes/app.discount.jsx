@@ -28,17 +28,22 @@ const PRODUCTS_QUERY = `#graphql
   }
 `;
 
-const VIP_AUTOMATIC_DISCOUNTS_QUERY = `#graphql
-  query vipAutomaticDiscounts($first: Int!) {
-    automaticDiscountNodes(first: $first, query: "title:VIP-AUTO-*") {
+const VIP_CODE_DISCOUNTS_QUERY = `#graphql
+  query vipCodeDiscounts($first: Int!) {
+    codeDiscountNodes(first: $first, query: "title:VIP-CODE-*") {
       nodes {
         id
-        automaticDiscount {
-          ... on DiscountAutomaticBasic {
+        codeDiscount {
+          ... on DiscountCodeBasic {
             title
             status
             startsAt
             endsAt
+            codes(first: 1) {
+              nodes {
+                code
+              }
+            }
           }
         }
       }
@@ -46,14 +51,14 @@ const VIP_AUTOMATIC_DISCOUNTS_QUERY = `#graphql
   }
 `;
 
-const CREATE_AUTOMATIC_DISCOUNT_MUTATION = `#graphql
-  mutation discountAutomaticBasicCreate($automaticBasicDiscount: DiscountAutomaticBasicInput!) {
-    discountAutomaticBasicCreate(automaticBasicDiscount: $automaticBasicDiscount) {
+const CREATE_CODE_DISCOUNT_MUTATION = `#graphql
+  mutation discountCodeBasicCreate($basicCodeDiscount: DiscountCodeBasicInput!) {
+    discountCodeBasicCreate(basicCodeDiscount: $basicCodeDiscount) {
       userErrors {
         field
         message
       }
-      automaticDiscountNode {
+      codeDiscountNode {
         id
       }
     }
@@ -187,16 +192,16 @@ export const loader = async ({ request }) => {
 
   const vipActiveByProduct = {};
   try {
-    const discountResponse = await admin.graphql(VIP_AUTOMATIC_DISCOUNTS_QUERY, {
+    const discountResponse = await admin.graphql(VIP_CODE_DISCOUNTS_QUERY, {
       variables: { first: 100 },
     });
     const discountJson = await discountResponse.json();
-    const discountNodes = discountJson?.data?.automaticDiscountNodes?.nodes || [];
+    const discountNodes = discountJson?.data?.codeDiscountNodes?.nodes || [];
 
     for (const node of discountNodes) {
-      const basic = node?.automaticDiscount;
+      const basic = node?.codeDiscount;
       const title = basic?.title;
-      if (!title || !title.startsWith("VIP-AUTO-")) continue;
+      if (!title || !title.startsWith("VIP-CODE-")) continue;
 
       const parts = title.split("-");
       const productSuffix = parts[parts.length - 1];
@@ -205,8 +210,9 @@ export const loader = async ({ request }) => {
       const matchedProduct = normalizedProducts.find((p) => p.id.endsWith(`/${productSuffix}`));
       if (!matchedProduct) continue;
 
+      const discountCode = basic?.codes?.nodes?.[0]?.code || title;
       vipActiveByProduct[matchedProduct.id] = {
-        code: title,
+        code: discountCode,
         status: basic?.status || "ACTIVE",
         startsAt: basic?.startsAt || null,
         endsAt: basic?.endsAt || null,
@@ -245,16 +251,14 @@ export const action = async ({ request }) => {
       return { ok: false, errors: [{ message: "VIP tag is required" }] };
     }
 
+    // Segment ID is optional — if provided, restricts the discount code to that segment only.
+    // If not provided, the code is unrestricted (all: true) and should be shared only with VIP customers via theme.
     let vipSegmentId = vipSegmentIdInput || null;
-    const desiredSegmentName = `VIP_TAG_${vipTag}`;
 
     if (!vipSegmentId) {
-      const searchQueries = [
-        `name:${desiredSegmentName}`,
-        `name:'${desiredSegmentName}'`,
-        vipTag,
-      ];
-
+      // Try auto-lookup as a convenience. Failure is non-fatal.
+      const desiredSegmentName = `VIP_TAG_${vipTag}`;
+      const searchQueries = [`name:${desiredSegmentName}`, vipTag];
       for (const searchQuery of searchQueries) {
         try {
           const segmentsResponse = await admin.graphql(SEGMENTS_QUERY, {
@@ -272,17 +276,13 @@ export const action = async ({ request }) => {
             break;
           }
         } catch (err) {
-          console.warn("Segment lookup failed:", err.message);
+          console.warn("Segment lookup skipped:", err.message);
         }
       }
     }
 
-    if (!vipSegmentId) {
-      return {
-        ok: false,
-        errors: [{ message: `VIP segment not found for tag '${vipTag}'. Please paste Segment ID. You can paste numeric ID from URL or full gid://shopify/Segment/... value.` }],
-      };
-    }
+    // Note: vipSegmentId may still be null here — that is OK.
+    // customerSelection will use { all: true } in that case.
 
     const applied = [];
     const errors = [];
@@ -324,18 +324,21 @@ export const action = async ({ request }) => {
         }
 
         const randomSuffix = Math.floor(Math.random() * 1000000);
-        const code = `VIP-AUTO-${Math.round(percentage)}-${Date.now()}-${randomSuffix}-${productId.split("/").pop()}`;
+        const productNumericId = productId.split("/").pop();
+        const code = `VIP-CODE-${Math.round(percentage)}-${productNumericId}-${randomSuffix}`;
+        const title = `VIP-CODE-${Math.round(percentage)}-${Date.now()}-${productNumericId}`;
         const startIso = startsAt ? new Date(startsAt).toISOString() : new Date().toISOString();
         const endIso = endsAt ? new Date(endsAt).toISOString() : null;
 
-        const automaticBasicDiscount = {
-          title: code,
+        const customerSelection = vipSegmentId
+          ? { customerSegments: { add: [vipSegmentId] } }
+          : { all: true };
+
+        const basicCodeDiscount = {
+          title,
+          code,
           startsAt: startIso,
-          context: {
-            customerSegments: {
-              add: [vipSegmentId],
-            },
-          },
+          customerSelection,
           customerGets: {
             value: {
               percentage: Number(effectivePercentage.toFixed(6)),
@@ -349,21 +352,21 @@ export const action = async ({ request }) => {
         };
 
         if (endIso) {
-          automaticBasicDiscount.endsAt = endIso;
+          basicCodeDiscount.endsAt = endIso;
         }
 
-        console.log("Creating automatic VIP discount:", code);
+        console.log("Creating VIP code discount:", code);
 
-        const response = await admin.graphql(CREATE_AUTOMATIC_DISCOUNT_MUTATION, {
+        const response = await admin.graphql(CREATE_CODE_DISCOUNT_MUTATION, {
           variables: {
-            automaticBasicDiscount,
+            basicCodeDiscount,
           },
         });
 
         const json = await response.json();
         console.log("Mutation response for", code, ":", json);
 
-        const userErrors = json?.data?.discountAutomaticBasicCreate?.userErrors || [];
+        const userErrors = json?.data?.discountCodeBasicCreate?.userErrors || [];
 
         if (userErrors.length > 0) {
           const firstError = userErrors[0];
@@ -376,9 +379,9 @@ export const action = async ({ request }) => {
           code,
           productName: productNode?.title || productId,
           percentage,
-          vipSegmentId,
           effectivePercentage: Number((effectivePercentage * 100).toFixed(4)),
           targetPrice: Number(pricePlan.targetPrice.toFixed(2)),
+          segmentRestricted: Boolean(vipSegmentId),
         });
       } catch (err) {
         console.error("Mutation error for product", productId, ":", err.message);
@@ -609,16 +612,13 @@ export default function DiscountPage() {
                 {result.applied.map((item, idx) => (
                   <li key={idx}>
                     <code>{item.code}</code>
-                    {" "}
-                    Product: {item.productName}
+                    {" — "}
+                    {item.productName}
                     {" | "}
-                    Segment: {item.vipSegmentId}
-                    {" "}
-                    Requested: {item.percentage}%
+                    {item.percentage}% requested → {item.effectivePercentage}% applied
                     {" | "}
-                    Applied: {item.effectivePercentage}%
-                    {" | "}
-                    Target Price: ${item.targetPrice}
+                    Target: ${item.targetPrice}
+                    {item.segmentRestricted ? " | VIP segment restricted" : " | All customers (add Segment ID to restrict)"}
                   </li>
                 ))}
               </ul>
