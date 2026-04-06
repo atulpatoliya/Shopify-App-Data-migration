@@ -20,7 +20,7 @@ const shopify = shopifyApp({
   appUrl,
   authPathPrefix: "/auth",
   sessionStorage: new MemorySessionStorage(),
-  distribution: AppDistribution.AppStore,
+  distribution: AppDistribution.SingleMerchant,
   future: {
     expiringOfflineAccessTokens: true,
   },

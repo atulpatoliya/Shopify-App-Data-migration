@@ -1,6 +1,11 @@
 import { appApiKey, authenticate } from "./shopify.server";
 export const loader = async ({ request }) => {
-  await authenticate.admin(request);
+  const pathname = new URL(request.url).pathname;
+
+  if (!pathname.startsWith("/auth") && !pathname.startsWith("/webhooks")) {
+    await authenticate.admin(request);
+  }
+
   return { apiKey: appApiKey };
 };
 
