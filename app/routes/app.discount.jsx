@@ -50,14 +50,6 @@ const UPDATE_AUTO_DISCOUNT_MUTATION = `#graphql
   }
 `;
 
-const UPDATE_METAFIELD_MUTATION = `#graphql
-  mutation metafieldsSet($metafields: [MetafieldsSetInput!]!) {
-    metafieldsSet(metafields: $metafields) {
-      userErrors { field message }
-    }
-  }
-`;
-
 const PRODUCTS_QUERY = `#graphql
   query getProducts($first: Int!, $after: String) {
     products(first: $first, after: $after) {

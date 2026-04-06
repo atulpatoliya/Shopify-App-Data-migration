@@ -7,13 +7,17 @@ import {
 } from "@shopify/shopify-app-react-router/server";
 
 export const appApiKey = process.env.SHOPIFY_API_KEY || "";
+const appUrl =
+  process.env.SHOPIFY_APP_URL ||
+  process.env.RENDER_EXTERNAL_URL ||
+  "";
 
 const shopify = shopifyApp({
   apiKey: appApiKey,
   apiSecretKey: process.env.SHOPIFY_API_SECRET || "",
   apiVersion: ApiVersion.October25,
   scopes: process.env.SCOPES?.split(","),
-  appUrl: process.env.SHOPIFY_APP_URL || "",
+  appUrl,
   authPathPrefix: "/auth",
   sessionStorage: new MemorySessionStorage(),
   distribution: AppDistribution.AppStore,
