@@ -1,5 +1,5 @@
 {% liquid
-  assign vip_tag = block.settings.vip_tag | default: 'vip_cutomer'
+  assign vip_tag = block.settings.vip_tag | default: 'vip_customer'
   assign discount_percent = block.settings.discount_percent | plus: 0
   assign customer_is_vip = false
   if customer and customer.tags contains vip_tag
@@ -82,7 +82,7 @@
       "type": "text",
       "id": "vip_tag",
       "label": "VIP customer tag",
-      "default": "vip_cutomer"
+      "default": "vip_customer"
     },
     {
       "type": "range",

@@ -8,7 +8,7 @@ query RunInput {
     buyerIdentity {
       isAuthenticated
       customer {
-        hasAnyTag(tags: ["vip_cutomer", "vip_customer"])
+        hasAnyTag(tags: ["vip_customer"])
         metafield(namespace: "$app:vip-product-discount", key: "customer-pricing") {
           value
         }
