@@ -1,0 +1,99 @@
+{% liquid
+  assign vip_tag = block.settings.vip_tag | default: 'vip_cutomer'
+  assign discount_percent = block.settings.discount_percent | plus: 0
+  assign customer_is_vip = false
+  if customer and customer.tags contains vip_tag
+    assign customer_is_vip = true
+  endif
+
+  assign selected_variant = product.selected_or_first_available_variant
+  assign current_price = selected_variant.price
+  assign compare_price = selected_variant.compare_at_price
+  assign base_price = current_price
+  assign vip_price = current_price
+  assign show_vip_price = false
+
+  if customer_is_vip and discount_percent > 0 and discount_percent < 100
+    if compare_price and compare_price > current_price
+      assign base_price = compare_price
+      assign existing_discount = compare_price | minus: current_price | times: 100.0 | divided_by: compare_price
+      if existing_discount < discount_percent
+        assign vip_price = base_price | times: 100.0 | minus: discount_percent | divided_by: 100.0
+      endif
+    else
+      assign vip_price = current_price | times: 100.0 | minus: discount_percent | divided_by: 100.0
+    endif
+
+    if vip_price < current_price
+      assign show_vip_price = true
+    endif
+  endif
+%}
+
+{% if product %}
+  <div
+    class="vip-price-widget"
+    data-vip-tag="{{ vip_tag | escape }}"
+    data-percent="{{ discount_percent }}"
+    data-customer-vip="{{ customer_is_vip }}"
+    data-selected-variant-id="{{ selected_variant.id }}"
+  >
+    <script type="application/json" class="vip-variants-json">
+      {
+        {% for variant in product.variants %}
+          "{{ variant.id }}": {
+            "price": {{ variant.price | json }},
+            "compare_at_price": {{ variant.compare_at_price | default: 0 | json }}
+          }{% unless forloop.last %},{% endunless %}
+        {% endfor %}
+      }
+    </script>
+
+    <div class="vip-price-content" {% unless show_vip_price %}style="display:none"{% endunless %}>
+      <div class="vip-price-title">VIP Price</div>
+      <div class="vip-price-values">
+        <span class="vip-current" data-vip-price>{{ vip_price | money }}</span>
+        <span class="vip-original" data-original-price>{{ current_price | money }}</span>
+      </div>
+      <div class="vip-price-note">Auto applied for logged-in VIP customer</div>
+    </div>
+  </div>
+
+  <script src="{{ 'vip-price-display.js' | asset_url }}" defer></script>
+
+  <style>
+    .vip-price-widget { margin-top: 10px; }
+    .vip-price-content { border: 1px solid #d7eadf; background: #f5fbf7; border-radius: 8px; padding: 10px 12px; }
+    .vip-price-title { font-weight: 600; color: #0b6e4f; margin-bottom: 4px; }
+    .vip-price-values { display: flex; align-items: baseline; gap: 8px; }
+    .vip-current { font-size: 1.25rem; font-weight: 700; color: #0b6e4f; }
+    .vip-original { text-decoration: line-through; opacity: 0.65; }
+    .vip-price-note { margin-top: 4px; font-size: 0.85rem; opacity: 0.8; }
+  </style>
+{% endif %}
+
+{% schema %}
+{
+  "name": "VIP Price Display",
+  "target": "section",
+  "templates": ["product"],
+  "settings": [
+    {
+      "type": "text",
+      "id": "vip_tag",
+      "label": "VIP customer tag",
+      "default": "vip_cutomer"
+    },
+    {
+      "type": "range",
+      "id": "discount_percent",
+      "label": "VIP discount percent",
+      "min": 1,
+      "max": 90,
+      "step": 1,
+      "default": 25
+    }
+  ]
+}
+{% endschema %}
+

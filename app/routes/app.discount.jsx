@@ -1,6 +1,62 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { useLoaderData, useFetcher } from "react-router";
 import { authenticate } from "../shopify.server";
+
+const VIP_FUNCTION_HANDLE = "vip-product-discount";
+const VIP_AUTO_TITLE = "VIP-AUTO-FUNCTION";
+const VIP_DEFAULT_TAG = "vip_customer";
+
+// ── Shopify Function Auto-Discount ──────────────────────────────────────────
+
+const VIP_AUTO_DISCOUNT_QUERY = `#graphql
+  query vipAutoDiscount {
+    discountNodes(first: 5, query: "title:VIP-AUTO-FUNCTION") {
+      nodes {
+        id
+        discount {
+          ... on DiscountAutomaticApp {
+            title
+            status
+            discountClass
+          }
+        }
+        metafield(namespace: "$app:vip-product-discount", key: "function-configuration") {
+          value
+        }
+      }
+    }
+  }
+`;
+
+const CREATE_AUTO_DISCOUNT_MUTATION = `#graphql
+  mutation discountAutomaticAppCreate($automaticAppDiscount: DiscountAutomaticAppInput!) {
+    discountAutomaticAppCreate(automaticAppDiscount: $automaticAppDiscount) {
+      userErrors { field message }
+      automaticAppDiscount {
+        discountId
+      }
+    }
+  }
+`;
+
+const UPDATE_AUTO_DISCOUNT_MUTATION = `#graphql
+  mutation discountAutomaticAppUpdate($id: ID!, $automaticAppDiscount: DiscountAutomaticAppInput!) {
+    discountAutomaticAppUpdate(id: $id, automaticAppDiscount: $automaticAppDiscount) {
+      userErrors { field message }
+      automaticAppDiscount {
+        discountId
+      }
+    }
+  }
+`;
+
+const UPDATE_METAFIELD_MUTATION = `#graphql
+  mutation metafieldsSet($metafields: [MetafieldsSetInput!]!) {
+    metafieldsSet(metafields: $metafields) {
+      userErrors { field message }
+    }
+  }
+`;
 
 const PRODUCTS_QUERY = `#graphql
   query getProducts($first: Int!, $after: String) {
@@ -222,17 +278,115 @@ export const loader = async ({ request }) => {
     console.warn("VIP discount status load skipped:", err.message);
   }
 
-  return { products: normalizedProducts, vipActiveByProduct };
+  const vipAutoDiscountInfo = {
+    exists: false,
+    id: null,
+    status: null,
+    percentage: null,
+    functionHandle: VIP_FUNCTION_HANDLE,
+  };
+  try {
+    const autoResp = await admin.graphql(VIP_AUTO_DISCOUNT_QUERY);
+    const autoJson = await autoResp.json();
+    const autoNodes = autoJson?.data?.discountNodes?.nodes || [];
+    const autoNode = autoNodes.find((n) => n?.discount?.title === VIP_AUTO_TITLE);
+    if (autoNode) {
+      vipAutoDiscountInfo.exists = true;
+      vipAutoDiscountInfo.id = autoNode.id;
+      vipAutoDiscountInfo.status = autoNode?.discount?.status || "UNKNOWN";
+      try {
+        const cfg = JSON.parse(autoNode?.metafield?.value || "{}");
+        vipAutoDiscountInfo.percentage = cfg?.percentage ?? null;
+      } catch (_e) { /* ignore */ }
+    }
+  } catch (err) {
+    console.warn("VIP auto-discount status load skipped:", err.message);
+  }
+
+  return { products: normalizedProducts, vipActiveByProduct, vipAutoDiscountInfo };
 };
 
 export const action = async ({ request }) => {
   try {
     const { admin } = await authenticate.admin(request);
     const formData = await request.formData();
+    const _action = formData.get("_action");
+
+    // ── Configure VIP Function auto-discount ───────────────────────────────
+    if (_action === "configure_function") {
+      const percentage = toNumber(formData.get("function_percent"));
+      const existingDiscountId = String(formData.get("existing_discount_id") || "").trim();
+      const functionConfigValue = JSON.stringify({ percentage });
+      const automaticAppDiscountInput = {
+        title: VIP_AUTO_TITLE,
+        functionHandle: VIP_FUNCTION_HANDLE,
+        startsAt: new Date().toISOString(),
+        combinesWith: {
+          productDiscounts: false,
+          orderDiscounts: false,
+          shippingDiscounts: false,
+        },
+        context: {
+          all: "ALL",
+        },
+        discountClasses: ["PRODUCT"],
+        metafields: [
+          {
+            namespace: "$app:vip-product-discount",
+            key: "function-configuration",
+            type: "json",
+            value: functionConfigValue,
+          },
+        ],
+      };
+
+      if (percentage <= 0 || percentage > 100) {
+        return { _action, ok: false, errors: [{ message: "Percent must be 1–100" }] };
+      }
+
+      let discountNodeId = existingDiscountId || null;
+
+      if (!discountNodeId) {
+        // Create the automatic App discount linked to the function handle.
+        const createResp = await admin.graphql(CREATE_AUTO_DISCOUNT_MUTATION, {
+          variables: {
+            automaticAppDiscount: automaticAppDiscountInput,
+          },
+        });
+        const createJson = await createResp.json();
+        const createErrors = createJson?.data?.discountAutomaticAppCreate?.userErrors || [];
+        if (createErrors.length > 0) {
+          return { _action, ok: false, errors: createErrors };
+        }
+        discountNodeId = createJson?.data?.discountAutomaticAppCreate?.automaticAppDiscount?.discountId;
+      } else {
+        // Update the existing automatic app discount so legacy misconfigurations
+        // (such as missing discount classes) are corrected in place.
+        const updateResp = await admin.graphql(UPDATE_AUTO_DISCOUNT_MUTATION, {
+          variables: {
+            id: discountNodeId,
+            automaticAppDiscount: automaticAppDiscountInput,
+          },
+        });
+        const updateJson = await updateResp.json();
+        const updateErrors = updateJson?.data?.discountAutomaticAppUpdate?.userErrors || [];
+        if (updateErrors.length > 0) {
+          return { _action, ok: false, errors: updateErrors };
+        }
+      }
+
+      if (!discountNodeId) {
+        return { _action, ok: false, errors: [{ message: "Could not find or create VIP auto-pricing discount." }] };
+      }
+
+      return { _action, ok: true, message: `VIP auto-pricing configured with ${percentage}%` };
+    }
+
+    // ── Create code discounts per product (existing flow) ─────────────────
 
     const selectedProductIds = JSON.parse(formData.get("selected_products") || "[]");
     const percentage = toNumber(formData.get("discount_percent"));
-    const vipTag = String(formData.get("vip_tag") || "vip_cutomer").trim();
+    const vipTag = String(formData.get("vip_tag") || VIP_DEFAULT_TAG).trim();
     const vipSegmentIdInput = normalizeSegmentGid(formData.get("vip_segment_id"));
     const startsAt = formData.get("starts_at");
     const endsAt = formData.get("ends_at");
@@ -339,6 +493,11 @@ export const action = async ({ request }) => {
           code,
           startsAt: startIso,
           customerSelection,
+          combinesWith: {
+            productDiscounts: true,
+            orderDiscounts: true,
+            shippingDiscounts: true,
+          },
           customerGets: {
             value: {
               percentage: Number(effectivePercentage.toFixed(6)),
@@ -402,19 +561,62 @@ export const action = async ({ request }) => {
 };
 
 export default function DiscountPage() {
-  const { products = [], vipActiveByProduct = {}, error: loaderError } = useLoaderData() || {};
+  const {
+    products = [],
+    vipActiveByProduct = {},
+    vipAutoDiscountInfo = {},
+    error: loaderError,
+  } = useLoaderData() || {};
   const fetcher = useFetcher();
+  const fnFetcher = useFetcher();
 
   const [discountPercent, setDiscountPercent] = useState("25");
-  const [vipTag, setVipTag] = useState("vip_cutomer");
+  const [vipTag, setVipTag] = useState(VIP_DEFAULT_TAG);
   const [vipSegmentId, setVipSegmentId] = useState("");
   const [startsAt, setStartsAt] = useState("");
   const [endsAt, setEndsAt] = useState("");
   const [selected, setSelected] = useState({});
+  const [fnPercent, setFnPercent] = useState("");
+
+  // Restore saved settings from localStorage on mount (client-only)
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("vip_discount_settings");
+      if (saved) {
+        const s = JSON.parse(saved);
+        if (s.discountPercent !== undefined) setDiscountPercent(s.discountPercent);
+        if (s.vipTag !== undefined) setVipTag(s.vipTag);
+        if (s.vipSegmentId !== undefined) setVipSegmentId(s.vipSegmentId);
+        if (s.startsAt !== undefined) setStartsAt(s.startsAt);
+        if (s.endsAt !== undefined) setEndsAt(s.endsAt);
+        if (s.fnPercent !== undefined) setFnPercent(s.fnPercent);
+      }
+    } catch (_e) { /* ignore */ }
+  }, []);
+
+  // Persist settings to localStorage whenever they change
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        "vip_discount_settings",
+        JSON.stringify({ discountPercent, vipTag, vipSegmentId, startsAt, endsAt, fnPercent }),
+      );
+    } catch (_e) { /* ignore */ }
+  }, [discountPercent, vipTag, vipSegmentId, startsAt, endsAt, fnPercent]);
 
   const selectedIds = useMemo(
     () => Object.keys(selected).filter((id) => selected[id]),
     [selected],
+  );
+
+  const activeProducts = useMemo(
+    () => products.filter((p) => Boolean(vipActiveByProduct[p.id])),
+    [products, vipActiveByProduct],
+  );
+
+  const availableProducts = useMemo(
+    () => products.filter((p) => !vipActiveByProduct[p.id]),
+    [products, vipActiveByProduct],
   );
 
   const percent = toNumber(discountPercent);
@@ -426,7 +628,7 @@ export default function DiscountPage() {
 
   const toggleAll = (checked) => {
     const next = {};
-    for (const p of products) {
+    for (const p of availableProducts) {
       next[p.id] = checked;
     }
     setSelected(next);
@@ -446,10 +648,19 @@ export default function DiscountPage() {
     fetcher.submit(fd, { method: "POST" });
   };
 
+  const handleFnSubmit = (e) => {
+    e.preventDefault();
+    const fd = new FormData();
+    fd.set("_action", "configure_function");
+    fd.set("function_percent", fnPercent || discountPercent);
+    if (vipAutoDiscountInfo.id) fd.set("existing_discount_id", vipAutoDiscountInfo.id);
+    fnFetcher.submit(fd, { method: "POST" });
+  };
+
   return (
     <div style={{ maxWidth: 1200, margin: "2rem auto", padding: "0 1rem" }}>
       <h2>VIP Discount Manager</h2>
-      <p>Create discount codes. Applies based on compare-at price if available, else current price.</p>
+      <p>Use auto pricing for logged-in VIP customers. Legacy code discounts remain below only for manual fallback.</p>
 
       {loaderError && (
         <div style={{ marginBottom: 16, padding: 12, backgroundColor: "#ffebee", borderRadius: 4, color: "#b71c1c" }}>
@@ -457,9 +668,114 @@ export default function DiscountPage() {
         </div>
       )}
 
+      {activeProducts.length > 0 && (
+        <div style={{ marginBottom: 20 }}>
+          <h3 style={{ marginBottom: 8 }}>Active Discount Products ({activeProducts.length})</h3>
+          <table border="1" cellPadding="10" cellSpacing="0" style={{ width: "100%" }}>
+            <thead>
+              <tr style={{ backgroundColor: "#f0f8f5" }}>
+                <th>Product</th>
+                <th>Price</th>
+                <th>Compare-at</th>
+                <th>Active Code</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {activeProducts.map((p) => {
+                const activeInfo = vipActiveByProduct[p.id];
+                return (
+                  <tr key={p.id}>
+                    <td>{p.name}</td>
+                    <td>${p.price.toFixed(2)}</td>
+                    <td>${p.compareAtPrice ? p.compareAtPrice.toFixed(2) : "-"}</td>
+                    <td>{activeInfo?.code || "-"}</td>
+                    <td style={{ color: "#0b6e4f" }}>✓ Active</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* ── VIP Auto-Discount Function Panel ── */}
+      <div
+        style={{
+          marginBottom: 24,
+          padding: 16,
+          borderRadius: 4,
+          border: "2px solid",
+          borderColor: vipAutoDiscountInfo.exists ? "#0b6e4f" : "#666",
+          backgroundColor: vipAutoDiscountInfo.exists ? "#e8f5e9" : "#f9f9f9",
+        }}
+      >
+        <h3 style={{ marginTop: 0 }}>
+          {vipAutoDiscountInfo.exists
+            ? `✓ VIP Auto-Pricing Active — ${vipAutoDiscountInfo.percentage ?? "?"}% (${vipAutoDiscountInfo.status})`
+            : "⭐ VIP Auto-Pricing Function (Recommended)"}
+        </h3>
+        <p style={{ marginTop: 0, marginBottom: 12, color: "#444" }}>
+          Automatically applies VIP pricing to ALL products in cart for logged-in customers with{" "}
+          <strong>{vipTag || VIP_DEFAULT_TAG}</strong> tag. No discount codes needed. Blocks other discounts from stacking.
+        </p>
+        <form onSubmit={handleFnSubmit} style={{ display: "flex", alignItems: "flex-end", gap: 12, flexWrap: "wrap" }}>
+          <div>
+            <label htmlFor="fn-pct" style={{ display: "block", marginBottom: 4 }}>
+              VIP Discount %
+            </label>
+            <input
+              id="fn-pct"
+              type="number"
+              min="1"
+              max="99"
+              step="0.01"
+              placeholder={discountPercent || "25"}
+              value={fnPercent}
+              onChange={(e) => setFnPercent(e.target.value)}
+              style={{ width: 100, padding: 6 }}
+            />
+          </div>
+          <button
+            type="submit"
+            disabled={fnFetcher.state === "submitting"}
+            style={{
+              padding: "8px 18px",
+              backgroundColor: "#0066cc",
+              color: "white",
+              border: "none",
+              borderRadius: 4,
+              cursor: "pointer",
+            }}
+          >
+            {fnFetcher.state === "submitting"
+              ? "Saving..."
+              : vipAutoDiscountInfo.exists
+                ? "Update VIP Auto-Pricing"
+                : "Activate VIP Auto-Pricing"}
+          </button>
+        </form>
+        {fnFetcher.data && (
+          <div
+            style={{
+              marginTop: 10,
+              color: fnFetcher.data.ok ? "#0b6e4f" : "#b71c1c",
+            }}
+          >
+            {fnFetcher.data.ok
+              ? `✓ ${fnFetcher.data.message}`
+              : (fnFetcher.data.errors ?? []).map((e) => e.message).join(", ")}
+          </div>
+        )}
+      </div>
+
+      <div style={{ marginBottom: 24, padding: 12, borderRadius: 4, backgroundColor: "#fff8e1", color: "#7a5d00" }}>
+        Cart અને checkout માં ભાવ દેખાડવા માટે ઉપરનું auto-pricing activate કરવું જરૂરી છે. નીચેનો per-product code flow cart માં પોતાના આપ લાગતો નથી.
+      </div>
+
       <form onSubmit={handleSubmit}>
-        <fieldset style={{ border: "1px solid #ccc", padding: 16, marginBottom: 20, borderRadius: 4 }}>
-          <legend>Discount Settings</legend>
+        <fieldset style={{ border: "1px solid #ccc", padding: 16, marginBottom: 20, borderRadius: 4, opacity: 0.85 }}>
+          <legend>Legacy Manual Code Settings</legend>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 16 }}>
             <div>
               <label htmlFor="pct">Discount %</label>
@@ -518,8 +834,28 @@ export default function DiscountPage() {
           </div>
         </fieldset>
 
-        <div style={{ marginBottom: 12 }}>
-          <button type="button" onClick={() => toggleAll(true)} style={{ marginRight: 8, padding: "6px 12px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12, flexWrap: "wrap" }}>
+          <button
+            type="submit"
+            disabled={fetcher.state === "submitting" || selectedIds.length === 0}
+            style={{
+              padding: "10px 24px",
+              fontSize: 15,
+              fontWeight: "bold",
+              backgroundColor: selectedIds.length === 0 ? "#ccc" : "#0066cc",
+              color: "white",
+              border: "none",
+              borderRadius: 4,
+              cursor: selectedIds.length === 0 ? "not-allowed" : "pointer",
+            }}
+          >
+            {fetcher.state === "submitting"
+              ? "Creating..."
+              : selectedIds.length > 0
+                ? `Create Legacy Code (${selectedIds.length} product${selectedIds.length > 1 ? "s" : ""})`
+                : "Create Legacy Code"}
+          </button>
+          <button type="button" onClick={() => toggleAll(true)} style={{ padding: "6px 12px" }}>
             Select All
           </button>
           <button type="button" onClick={() => toggleAll(false)} style={{ padding: "6px 12px" }}>
@@ -540,9 +876,8 @@ export default function DiscountPage() {
             </tr>
           </thead>
           <tbody>
-            {products.map((p) => {
+            {availableProducts.map((p) => {
               const calc = computeTargetAndFixedDiscount(p.price, p.compareAtPrice, percent);
-              const activeInfo = vipActiveByProduct[p.id];
               return (
                 <tr key={p.id}>
                   <td>
@@ -558,51 +893,31 @@ export default function DiscountPage() {
                   <td>${calc.targetPrice.toFixed(2)}</td>
                   <td>${calc.fixedAmount.toFixed(2)}</td>
                   <td>
-                    {activeInfo ? (
-                      <span style={{ color: "#0b6e4f" }}>
-                        ✓ Active ({activeInfo.code})
-                      </span>
-                    ) : (
-                      <span style={{ color: calc.shouldApply ? "green" : "red" }}>
-                        {calc.shouldApply ? "✓" : "✗"} {calc.reason || "OK"}
-                      </span>
-                    )}
+                    <span style={{ color: calc.shouldApply ? "green" : "red" }}>
+                      {calc.shouldApply ? "✓" : "✗"} {calc.reason || "OK"}
+                    </span>
                   </td>
                 </tr>
               );
             })}
-            {products.length === 0 && (
+            {availableProducts.length === 0 && (
               <tr>
                 <td colSpan={7} style={{ textAlign: "center", color: "#666" }}>
-                  No products loaded. Refresh app preview once, and ensure dev server is running.
+                  No pending products. All loaded products already have active discounts.
                 </td>
               </tr>
             )}
           </tbody>
         </table>
 
-        <button
-          type="submit"
-          disabled={fetcher.state === "submitting" || selectedIds.length === 0}
-          style={{
-            padding: "12px 24px",
-            fontSize: 16,
-            backgroundColor: selectedIds.length === 0 ? "#ccc" : "#0066cc",
-            color: "white",
-            border: "none",
-            borderRadius: 4,
-            cursor: selectedIds.length === 0 ? "not-allowed" : "pointer",
-          }}
-        >
-          {fetcher.state === "submitting" ? "Creating..." : "Create Discount"}
-        </button>
+
       </form>
 
       {result && (
         <div style={{ marginTop: 32, padding: 20, backgroundColor: result.ok ? "#e8f5e9" : "#ffebee", borderRadius: 4 }}>
           <h3>Result</h3>
           <p style={{ marginTop: 0 }}>
-            Auto applies only for logged-in customers with tag <strong>{vipTag}</strong>.
+            Legacy code result. Auto cart pricing works only from the top VIP Auto-Pricing panel for logged-in customers with tag <strong>{vipTag}</strong>.
           </p>
 
           {result.applied?.length > 0 && (

@@ -8,6 +8,7 @@ node_modules/
 /public/_dev/
 /app/public/build/
 /extensions/*/dist/
+/extensions/*/generated/
 .react-router/
 
 # ── Database ──────────────────────────────────────────────────

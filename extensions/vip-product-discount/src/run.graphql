@@ -1,0 +1,39 @@
+query RunInput {
+  discountNode {
+    metafield(namespace: "$app:vip-product-discount", key: "function-configuration") {
+      value
+    }
+  }
+  cart {
+    buyerIdentity {
+      isAuthenticated
+      customer {
+        hasAnyTag(tags: ["vip_cutomer", "vip_customer"])
+        metafield(namespace: "$app:vip-product-discount", key: "customer-pricing") {
+          value
+        }
+      }
+    }
+    lines {
+      id
+      quantity
+      merchandise {
+        __typename
+        ... on ProductVariant {
+          id
+          product {
+            id
+          }
+        }
+      }
+      cost {
+        amountPerQuantity {
+          amount
+        }
+        compareAtAmountPerQuantity {
+          amount
+        }
+      }
+    }
+  }
+}
