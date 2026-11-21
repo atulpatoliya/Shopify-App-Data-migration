@@ -28,6 +28,15 @@
       assign show_vip_price = true
     endif
   endif
+
+  # Theme editor: the merchant isn't a logged-in customer, so show a sample
+  # so the block is visible and can be positioned.
+  assign is_editor_preview = false
+  if request.design_mode and show_vip_price == false and discount_percent > 0 and discount_percent < 100
+    assign vip_price = current_price | times: 100.0 | minus: discount_percent | divided_by: 100.0
+    assign show_vip_price = true
+    assign is_editor_preview = true
+  endif
 %}
 
 {% if product %}
@@ -55,7 +64,11 @@
         <span class="vip-current" data-vip-price>{{ vip_price | money }}</span>
         <span class="vip-original" data-original-price>{{ current_price | money }}</span>
       </div>
-      <div class="vip-price-note">Auto applied for logged-in VIP customer</div>
+      {% if is_editor_preview %}
+        <div class="vip-price-note">Preview — shown only to logged-in customers tagged {{ vip_tag | escape }}</div>
+      {% else %}
+        <div class="vip-price-note">Auto applied for logged-in VIP customer</div>
+      {% endif %}
     </div>
   </div>
 

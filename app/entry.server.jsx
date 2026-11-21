@@ -4,6 +4,8 @@ import { ServerRouter } from "react-router";
 import { createReadableStreamFromReadable } from "@react-router/node";
 import { isbot } from "isbot";
 import { addDocumentResponseHeaders } from "./shopify.server";
+// Starts the scheduled-export timer once per server process.
+import "./lib/scheduled-export.server";
 
 export const streamTimeout = 5000;
 

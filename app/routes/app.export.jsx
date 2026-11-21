@@ -5,6 +5,15 @@ import { boundary } from "@shopify/shopify-app-react-router/server";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
 import { getCurrentPlan, planSelectionUrl } from "../plans.server";
+import { EXPORT_PAGE_SIZE, fetchExportPage } from "../lib/export-fetch.server";
+import {
+  ALL_OPTIONAL_KEYS,
+  buildAppSheet,
+  buildShopifyCsvRows,
+  DEFAULT_FIELDS,
+  FIELD_GROUPS,
+  SHOPIFY_CSV_COLUMNS,
+} from "../lib/product-format";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SERVER: Loader — only counts, so the page opens fast on any catalog size.
@@ -49,60 +58,9 @@ export const loader = async ({ request }) => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SERVER: Action — returns one page of products at a time. The browser keeps
-// asking for the next page until done, so no single request is slow and the
-// merchant sees progress. (Bulk Operations are not available to this app's token.)
+// SERVER: Action — returns one page of products at a time; the browser keeps
+// asking for the next page, so no single request is slow.
 // ─────────────────────────────────────────────────────────────────────────────
-const PAGE_SIZE = 50;
-
-const EXPORT_PAGE_QUERY = `#graphql
-  query exportPage($first: Int!, $after: String, $query: String) {
-    products(first: $first, after: $after, query: $query) {
-      pageInfo { hasNextPage endCursor }
-      edges {
-        node {
-          id title vendor productType status tags handle createdAt updatedAt
-          totalInventory description
-          priceRange: priceRangeV2 {
-            minVariantPrice { amount currencyCode }
-            maxVariantPrice { amount currencyCode }
-          }
-          seo { title description }
-          media(first: 5) {
-            edges { node { ... on MediaImage { image { url } } } }
-          }
-          collections(first: 5) { edges { node { title } } }
-          variants(first: 100) {
-            pageInfo { hasNextPage endCursor }
-            edges {
-              node {
-                id title sku price compareAtPrice inventoryQuantity barcode
-                inventoryItem { measurement { weight { value unit } } }
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-`;
-
-const EXTRA_VARIANTS_QUERY = `#graphql
-  query extraVariants($id: ID!, $after: String) {
-    product(id: $id) {
-      variants(first: 250, after: $after) {
-        pageInfo { hasNextPage endCursor }
-        edges {
-          node {
-            id title sku price compareAtPrice inventoryQuantity barcode
-            inventoryItem { measurement { weight { value unit } } }
-          }
-        }
-      }
-    }
-  }
-`;
-
 export const action = async ({ request }) => {
   const { admin } = await authenticate.admin(request);
   const form = await request.formData();
@@ -116,234 +74,46 @@ export const action = async ({ request }) => {
   if (remaining <= 0) return { products: [], hasNextPage: false, limited: true };
 
   try {
-    const res = await admin.graphql(EXPORT_PAGE_QUERY, {
-      variables: { first: Math.min(PAGE_SIZE, remaining), after, query },
-    });
-    const json = await res.json();
-    const page = json.data.products;
-
-    const products = [];
-    for (const { node } of page.edges) {
-      // Rare: products with more than 100 variants.
-      let vInfo = node.variants.pageInfo;
-      while (vInfo?.hasNextPage) {
-        const vRes = await admin.graphql(EXTRA_VARIANTS_QUERY, {
-          variables: { id: node.id, after: vInfo.endCursor },
-        });
-        const extra = (await vRes.json()).data?.product?.variants;
-        if (!extra) break;
-        node.variants.edges.push(...extra.edges);
-        vInfo = extra.pageInfo;
-      }
-      products.push({
-        ...node,
-        images: {
-          edges: node.media.edges
-            .filter((e) => e.node?.image?.url)
-            .map((e) => ({ node: { url: e.node.image.url } })),
-        },
-      });
-    }
-
-    const reachedLimit = plan.limit != null && collected + products.length >= plan.limit;
+    const page = await fetchExportPage(admin, { first: Math.min(EXPORT_PAGE_SIZE, remaining), after, query });
+    const reachedLimit = plan.limit != null && collected + page.products.length >= plan.limit;
     return {
-      products,
-      hasNextPage: page.pageInfo.hasNextPage && !reachedLimit,
-      limited: reachedLimit && page.pageInfo.hasNextPage,
-      cursor: page.pageInfo.endCursor,
+      products: page.products,
+      hasNextPage: page.hasNextPage && !reachedLimit,
+      limited: reachedLimit && page.hasNextPage,
+      cursor: page.cursor,
     };
   } catch (err) {
-    const message =
-      err?.body?.errors?.graphQLErrors?.map((e) => e.message).join(", ") ||
-      err?.message ||
-      "Unknown error";
-    return { error: `Could not load products: ${message}` };
+    return { error: `Could not load products: ${err?.message || "Unknown error"}` };
   }
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FIELD GROUPS
+// CLIENT: build the file in the browser (dynamic import keeps xlsx out of SSR)
 // ─────────────────────────────────────────────────────────────────────────────
-const FIELD_GROUPS = [
-  {
-    group: "Basic Info",
-    fields: [
-      { key: "title",       label: "Product Title",   always: true },
-      { key: "vendor",      label: "Vendor" },
-      { key: "productType", label: "Product Type" },
-      { key: "status",      label: "Status" },
-      { key: "handle",      label: "Handle / URL Slug" },
-      { key: "description", label: "Description" },
-      { key: "createdAt",   label: "Created At" },
-      { key: "updatedAt",   label: "Updated At" },
-    ],
-  },
-  {
-    group: "Pricing",
-    fields: [
-      { key: "priceMin", label: "Min Price" },
-      { key: "priceMax", label: "Max Price" },
-    ],
-  },
-  {
-    group: "Variants",
-    fields: [
-      { key: "variants_title",          label: "Variant Title" },
-      { key: "variants_sku",            label: "Variant SKUs" },
-      { key: "variants_price",          label: "Variant Prices" },
-      { key: "variants_compareAtPrice", label: "Compare At Prices" },
-      { key: "variants_inventory",      label: "Variant Inventory" },
-      { key: "variants_barcode",        label: "Barcode" },
-      { key: "variants_weight",         label: "Weight" },
-    ],
-  },
-  {
-    group: "Organisation",
-    fields: [
-      { key: "tags",           label: "Tags" },
-      { key: "collections",    label: "Collections" },
-      { key: "totalInventory", label: "Total Inventory" },
-    ],
-  },
-  {
-    group: "Media",
-    fields: [{ key: "images", label: "Image URLs" }],
-  },
-  {
-    group: "SEO",
-    fields: [
-      { key: "seo_title",       label: "SEO Title" },
-      { key: "seo_description", label: "SEO Description" },
-    ],
-  },
-];
+const COLUMN_WIDTHS = { Title: 28, Description: 40, "Body (HTML)": 40, "Image URLs": 45, "Image Src": 45, Collections: 28, Tags: 28, "SEO Description": 36, "Variant Title": 24 };
 
-const ALL_OPTIONAL_KEYS = FIELD_GROUPS.flatMap((g) =>
-  g.fields.filter((f) => !f.always).map((f) => f.key)
-);
-
-const VARIANT_FIELD_KEYS = [
-  "variants_title",
-  "variants_sku",
-  "variants_price",
-  "variants_compareAtPrice",
-  "variants_inventory",
-  "variants_barcode",
-  "variants_weight",
-];
-
-// ─────────────────────────────────────────────────────────────────────────────
-// FLATTEN: one product → one or more Excel rows (one per variant)
-// ─────────────────────────────────────────────────────────────────────────────
-function flattenProduct(product, selectedFields) {
-  const has = (k) => selectedFields.includes(k) || k === "title";
-  const hasVariantColumns = VARIANT_FIELD_KEYS.some((k) => selectedFields.includes(k));
-  const base = {};
-
-  if (has("title"))          base["Title"]           = product.title ?? "";
-  if (has("vendor"))         base["Vendor"]           = product.vendor ?? "";
-  if (has("productType"))    base["Product Type"]     = product.productType ?? "";
-  if (has("status"))         base["Status"]           = product.status ?? "";
-  if (has("handle"))         base["Handle"]           = product.handle ?? "";
-  if (has("description"))    base["Description"]      = product.description ?? "";
-  if (has("createdAt"))      base["Created At"]       = product.createdAt ? new Date(product.createdAt).toLocaleString() : "";
-  if (has("updatedAt"))      base["Updated At"]       = product.updatedAt ? new Date(product.updatedAt).toLocaleString() : "";
-  if (has("priceMin"))       base["Min Price"]        = product.priceRange?.minVariantPrice?.amount ?? "";
-  if (has("priceMax"))       base["Max Price"]        = product.priceRange?.maxVariantPrice?.amount ?? "";
-  if (has("tags"))           base["Tags"]             = Array.isArray(product.tags) ? product.tags.join(", ") : (product.tags ?? "");
-  if (has("collections"))    base["Collections"]      = (product.collections?.edges ?? []).map((e) => e.node.title).join(", ");
-  if (has("totalInventory")) base["Total Inventory"]  = product.totalInventory ?? "";
-  if (has("images"))         base["Image URLs"]       = (product.images?.edges ?? []).map((e) => e.node.url).join("\n");
-  if (has("seo_title"))      base["SEO Title"]        = product.seo?.title ?? "";
-  if (has("seo_description"))base["SEO Description"]  = product.seo?.description ?? "";
-
-  // If variant columns are not selected, export exactly one row per product.
-  if (!hasVariantColumns) return [base];
-
-  const variants = (product.variants?.edges ?? []).map((e) => e.node);
-  if (variants.length === 0) return [base];
-
-  return variants.map((v) => {
-    const row = { ...base };
-    if (has("variants_title"))          row["Variant Title"]    = v.title ?? "";
-    if (has("variants_sku"))            row["Variant SKU"]      = v.sku ?? "";
-    if (has("variants_price"))          row["Variant Price"]    = v.price ?? "";
-    if (has("variants_compareAtPrice")) row["Compare At Price"] = v.compareAtPrice ?? "";
-    if (has("variants_inventory"))      row["Inventory Qty"]    = v.inventoryQuantity ?? "";
-    if (has("variants_barcode"))        row["Barcode"]          = v.barcode ?? "";
-    if (has("variants_weight")) {
-      const w = v.inventoryItem?.measurement?.weight;
-      row["Weight"] = w ? `${w.value} ${w.unit}` : "";
-    }
-    return row;
-  });
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// CLIENT: Build & download xlsx (dynamic import = client-only, no SSR crash)
-// ─────────────────────────────────────────────────────────────────────────────
-async function downloadExcel(products, selectedFields) {
-  const rows = products.flatMap((p) => flattenProduct(p, selectedFields));
+async function downloadFile(products, selectedFields, format) {
   const XLSX = await import("xlsx");
-  const columns = [
-    "Title",
-    ...FIELD_GROUPS.flatMap((group) =>
-      group.fields
-        .filter((field) => selectedFields.includes(field.key))
-        .map((field) => {
-          switch (field.key) {
-            case "vendor": return "Vendor";
-            case "productType": return "Product Type";
-            case "status": return "Status";
-            case "handle": return "Handle";
-            case "description": return "Description";
-            case "createdAt": return "Created At";
-            case "updatedAt": return "Updated At";
-            case "priceMin": return "Min Price";
-            case "priceMax": return "Max Price";
-            case "variants_title": return "Variant Title";
-            case "variants_sku": return "Variant SKU";
-            case "variants_price": return "Variant Price";
-            case "variants_compareAtPrice": return "Compare At Price";
-            case "variants_inventory": return "Inventory Qty";
-            case "variants_barcode": return "Barcode";
-            case "variants_weight": return "Weight";
-            case "tags": return "Tags";
-            case "collections": return "Collections";
-            case "totalInventory": return "Total Inventory";
-            case "images": return "Image URLs";
-            case "seo_title": return "SEO Title";
-            case "seo_description": return "SEO Description";
-            default: return field.label;
-          }
-        })
-    ),
-  ];
-
-  const normalizedRows = rows.map((row) => {
-    const ordered = {};
-    columns.forEach((column) => {
-      ordered[column] = row[column] ?? "";
-    });
-    return ordered;
-  });
-
-  const ws = XLSX.utils.json_to_sheet(normalizedRows, { header: columns });
-
-  const columnWidthByHeader = {
-    Title: 28,
-    Description: 40,
-    "Image URLs": 45,
-    Collections: 28,
-    Tags: 28,
-    "SEO Description": 36,
-    "Variant Title": 24,
-  };
-  ws["!cols"] = columns.map((column) => ({ wch: columnWidthByHeader[column] ?? 18 }));
+  const stamp = new Date().toISOString().slice(0, 10);
+  if (format === "shopify_csv") {
+    const rows = buildShopifyCsvRows(products);
+    const ws = XLSX.utils.json_to_sheet(rows, { header: SHOPIFY_CSV_COLUMNS });
+    const csv = XLSX.utils.sheet_to_csv(ws);
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `products-shopify-${stamp}.csv`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    return;
+  }
+  const { columns, rows } = buildAppSheet(products, selectedFields);
+  const ws = XLSX.utils.json_to_sheet(rows, { header: columns });
+  ws["!cols"] = columns.map((c) => ({ wch: COLUMN_WIDTHS[c] ?? 18 }));
   ws["!autofilter"] = { ref: ws["!ref"] };
-  const wb   = XLSX.utils.book_new();
+  const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Products");
-  XLSX.writeFile(wb, `shopify-products-${Date.now()}.xlsx`);
+  XLSX.writeFile(wb, `products-${stamp}.xlsx`);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -361,13 +131,10 @@ export default function ExportPage() {
   const submit       = useSubmit();
   const isNavigating = navigation.state !== "idle";
 
-  const [selected, setSelected] = useState(
-    new Set([
-      "vendor", "productType", "status", "tags", "images",
-      "priceMin", "priceMax",
-      "variants_title", "variants_sku", "variants_price", "variants_inventory", "collections",
-    ])
-  );
+  const [selected, setSelected] = useState(new Set(DEFAULT_FIELDS));
+  const [format, setFormat] = useState("xlsx");
+  const formatRef = useRef(format);
+  formatRef.current = format;
   const [searchQuery, setSearchQuery] = useState(appliedQuery);
   const [exporting,   setExporting]   = useState(false);
   const [progress,    setProgress]    = useState(0);
@@ -425,7 +192,7 @@ export default function ExportPage() {
       setErrorMsg("There are no products to export. Change the filter or add products to your store.");
       return;
     }
-    downloadExcel(all, Array.from(selectedRef.current))
+    downloadFile(all, Array.from(selectedRef.current), formatRef.current)
       .then(() => shopify.toast.show(`Exported ${all.length} products`))
       .catch((err) => setErrorMsg("The file could not be created: " + err.message));
   }, [pageFetcher.state, pageFetcher.data, exporting, appliedQuery, pageFetcher, shopify]);
@@ -513,7 +280,26 @@ export default function ExportPage() {
         </s-stack>
       </s-section>
 
-      <s-section heading="2. Choose columns">
+      <s-section heading="2. Choose format">
+        <s-stack gap="base">
+          <s-choice-list
+            label="File format"
+            labelAccessibilityVisibility="exclusive"
+            values={[format]}
+            onChange={(e) => setFormat(e.currentTarget.values?.[0] ?? "xlsx")}
+          >
+            <s-choice value="xlsx" {...(format === "xlsx" ? { selected: true } : {})}>
+              Excel (.xlsx) — choose your columns, edit and import back
+            </s-choice>
+            <s-choice value="shopify_csv" {...(format === "shopify_csv" ? { selected: true } : {})}>
+              Shopify CSV (.csv) — Shopify&apos;s standard product format, to move products to another store
+            </s-choice>
+          </s-choice-list>
+        </s-stack>
+      </s-section>
+
+      {format === "xlsx" && (
+      <s-section heading="3. Choose columns">
         <s-stack gap="base">
           <s-stack direction="inline" justifyContent="space-between" alignItems="center">
             <s-text color="subdued">{fieldCount} columns selected. Title is always included.</s-text>
@@ -545,12 +331,14 @@ export default function ExportPage() {
           </s-grid>
         </s-stack>
       </s-section>
+      )}
 
       <s-section slot="aside" heading="How it works">
         <s-ordered-list>
           <s-list-item>Filter products (optional)</s-list-item>
           <s-list-item>Choose the columns you need</s-list-item>
-          <s-list-item>Select Export to download an .xlsx file</s-list-item>
+          <s-list-item>Choose Excel or Shopify CSV</s-list-item>
+          <s-list-item>Select Export to download the file</s-list-item>
         </s-ordered-list>
       </s-section>
 

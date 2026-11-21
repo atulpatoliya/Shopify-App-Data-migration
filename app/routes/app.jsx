@@ -17,6 +17,8 @@ export default function App() {
         <s-link href="/app" rel="home">Dashboard</s-link>
         <s-link href="/app/export">Export products</s-link>
         <s-link href="/app/import">Import products</s-link>
+        <s-link href="/app/history">Import history</s-link>
+        <s-link href="/app/schedule">Scheduled exports</s-link>
         <s-link href="/app/discount">VIP pricing</s-link>
         {/* Plans only for the public App Store app (custom app is unlimited) */}
         {showPlans && <s-link href="/app/plans">Plans</s-link>}

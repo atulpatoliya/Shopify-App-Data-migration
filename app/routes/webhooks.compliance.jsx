@@ -1,4 +1,5 @@
 import { authenticate, sessionStorage } from "../shopify.server";
+import { deleteShopData } from "../db.server";
 
 // Mandatory privacy (GDPR) compliance webhooks.
 // https://shopify.dev/docs/apps/build/privacy-law-compliance
@@ -21,7 +22,8 @@ export const action = async ({ request }) => {
       if (sessions.length) {
         await sessionStorage.deleteSessions(sessions.map((s) => s.id));
       }
-      console.log(`[compliance] shop redact for ${shop}: deleted ${sessions.length} sessions`);
+      await deleteShopData(shop);
+      console.log(`[compliance] shop redact for ${shop}: deleted ${sessions.length} sessions and app data`);
       break;
     }
     default:

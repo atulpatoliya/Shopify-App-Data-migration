@@ -584,6 +584,7 @@ export default function DiscountPage() {
   const [selected, setSelected] = useState({});
   const [fnPercent, setFnPercent] = useState("");
   const [search, setSearch] = useState("");
+  const [showManual, setShowManual] = useState(false);
 
   const money = useMemo(() => {
     try {
@@ -787,6 +788,20 @@ export default function DiscountPage() {
       )}
 
       {/* ── Manual codes (legacy) ── */}
+      <s-section>
+        <s-stack direction="inline" justifyContent="space-between" alignItems="center">
+          <s-stack gap="small-300">
+            <s-text type="strong">Manual discount codes</s-text>
+            <s-text color="subdued">Advanced: one code per product that customers enter at checkout.</s-text>
+          </s-stack>
+          <s-button variant="tertiary" onClick={() => setShowManual((v) => !v)}>
+            {showManual ? "Hide" : "Show"}
+          </s-button>
+        </s-stack>
+      </s-section>
+
+      {showManual && (
+        <>
       <s-section heading="Manual discount codes">
         <s-stack gap="base">
           <s-paragraph color="subdued">
@@ -906,6 +921,8 @@ export default function DiscountPage() {
           </s-table>
         )}
       </s-section>
+        </>
+      )}
 
       {result && fetcher.state === "idle" && (
         <s-section heading="Last result">

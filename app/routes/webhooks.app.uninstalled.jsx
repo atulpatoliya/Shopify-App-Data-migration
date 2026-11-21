@@ -1,4 +1,5 @@
 import { authenticate, sessionStorage } from "../shopify.server";
+import { getSchedule, saveSchedule } from "../db.server";
 
 export const action = async ({ request }) => {
   const { shop, topic } = await authenticate.webhook(request);
@@ -10,6 +11,10 @@ export const action = async ({ request }) => {
   if (sessions.length) {
     await sessionStorage.deleteSessions(sessions.map((s) => s.id));
   }
+
+  // Stop scheduled exports; history and backups are removed on shop/redact (48h later).
+  const schedule = await getSchedule(shop).catch(() => null);
+  if (schedule?.enabled) await saveSchedule(shop, { ...schedule, enabled: false });
 
   return new Response();
 };

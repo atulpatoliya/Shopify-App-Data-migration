@@ -5,7 +5,7 @@ import { SUPPORT_EMAIL } from "../shopify.server";
 // "Privacy policy URL" in the Partner Dashboard / App Store listing.
 export const loader = () => ({
   supportEmail: SUPPORT_EMAIL,
-  updated: "2026-11-21",
+  updated: "2026-11-22",
 });
 
 export const meta = () => [{ title: "Privacy policy – Bulk Migration & VIP Pricing" }];
@@ -39,13 +39,15 @@ export default function Privacy() {
 
       <h2>Data we store</h2>
       <p>
-        We store a Shopify access session for your store so the App can work. No customer personal
+        We store a Shopify access session for your store so the App can work. To let you undo an import,
+        the App saves the previous product values it changes (titles, prices, SKUs, stock, metafields)
+        together with an import history, and your export schedule settings. No customer personal
         information is stored.
       </p>
 
       <h2>Data retention and deletion</h2>
       <p>
-        When you uninstall the App, its session data is deleted. We also respond to Shopify&apos;s
+        When you uninstall the App, its session data is deleted and scheduled exports stop. Import history and backups are deleted when Shopify sends the shop data deletion request (48 hours after uninstall). We also respond to Shopify&apos;s
         mandatory privacy webhooks (customer data request, customer redact and shop redact).
       </p>
 

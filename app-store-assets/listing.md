@@ -33,6 +33,14 @@ Reward loyal shoppers with VIP discounts. Tag customers as VIP and they automati
 - vip discount
 - customer tag discount
 
+## Web search content
+Title tag (max 60): Bulk Migration & VIP Pricing – Excel Product Editor
+Meta description (max 160): Export products to Excel, bulk edit and upload changes with a safe preview. Give tagged VIP customers automatic discounts in cart and checkout.
+
+## Install requirements
+- Sales channel: My app requires → Shopify Online Store (theme app extension for VIP price block)
+- Geographic requirements: none
+
 ## Categories (suggested)
 Primary: Store management → Product management (bulk editor / import & export)
 Secondary: Selling products → Pricing / Discounts
