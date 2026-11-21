@@ -1,19 +1,6 @@
-import { appApiKey, authenticate } from "./shopify.server";
-export const loader = async ({ request }) => {
-  const pathname = new URL(request.url).pathname;
-
-  if (!pathname.startsWith("/auth") && !pathname.startsWith("/webhooks")) {
-    await authenticate.admin(request);
-  }
-
-  return { apiKey: appApiKey };
-};
-
-import { Links, Meta, Outlet, Scripts, ScrollRestoration, useLoaderData } from "react-router";
-import { AppProvider } from "@shopify/shopify-app-react-router/react";
+import { Links, Meta, Outlet, Scripts, ScrollRestoration } from "react-router";
 
 export default function App() {
-  const { apiKey } = useLoaderData();
   return (
     <html lang="en">
       <head>
@@ -28,9 +15,7 @@ export default function App() {
         <Links />
       </head>
       <body>
-        <AppProvider embedded apiKey={apiKey}>
-          <Outlet />
-        </AppProvider>
+        <Outlet />
         <ScrollRestoration />
         <Scripts />
       </body>

@@ -1,5 +1,8 @@
+/* eslint-disable react/prop-types */
 import { useMemo, useState, useEffect } from "react";
 import { useLoaderData, useFetcher } from "react-router";
+import { boundary } from "@shopify/shopify-app-react-router/server";
+import { useAppBridge } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
 
 const VIP_FUNCTION_HANDLE = "vip-product-discount";
@@ -295,7 +298,18 @@ export const loader = async ({ request }) => {
     console.warn("VIP auto-discount status load skipped:", err.message);
   }
 
-  return { products: normalizedProducts, vipActiveByProduct, vipAutoDiscountInfo };
+  let currencyCode = "USD";
+  try {
+    const shopResp = await admin.graphql(`#graphql
+      query shopCurrency { shop { currencyCode } }
+    `);
+    const shopJson = await shopResp.json();
+    currencyCode = shopJson?.data?.shop?.currencyCode || currencyCode;
+  } catch (err) {
+    console.warn("Shop currency load skipped:", err.message);
+  }
+
+  return { products: normalizedProducts, vipActiveByProduct, vipAutoDiscountInfo, currencyCode };
 };
 
 export const action = async ({ request }) => {
@@ -506,7 +520,6 @@ export const action = async ({ request }) => {
           basicCodeDiscount.endsAt = endIso;
         }
 
-        console.log("Creating VIP code discount:", code);
 
         const response = await admin.graphql(CREATE_CODE_DISCOUNT_MUTATION, {
           variables: {
@@ -515,7 +528,6 @@ export const action = async ({ request }) => {
         });
 
         const json = await response.json();
-        console.log("Mutation response for", code, ":", json);
 
         const userErrors = json?.data?.discountCodeBasicCreate?.userErrors || [];
 
@@ -557,10 +569,12 @@ export default function DiscountPage() {
     products = [],
     vipActiveByProduct = {},
     vipAutoDiscountInfo = {},
+    currencyCode = "USD",
     error: loaderError,
   } = useLoaderData() || {};
   const fetcher = useFetcher();
   const fnFetcher = useFetcher();
+  const shopify = useAppBridge();
 
   const [discountPercent, setDiscountPercent] = useState("25");
   const [vipTag, setVipTag] = useState(VIP_DEFAULT_TAG);
@@ -569,6 +583,16 @@ export default function DiscountPage() {
   const [endsAt, setEndsAt] = useState("");
   const [selected, setSelected] = useState({});
   const [fnPercent, setFnPercent] = useState("");
+  const [search, setSearch] = useState("");
+
+  const money = useMemo(() => {
+    try {
+      const f = new Intl.NumberFormat(undefined, { style: "currency", currency: currencyCode });
+      return (n) => f.format(n);
+    } catch {
+      return (n) => `${Number(n).toFixed(2)} ${currencyCode}`;
+    }
+  }, [currencyCode]);
 
   // Restore saved settings from localStorage on mount (client-only)
   useEffect(() => {
@@ -586,7 +610,6 @@ export default function DiscountPage() {
     } catch (_e) { /* ignore */ }
   }, []);
 
-  // Persist settings to localStorage whenever they change
   useEffect(() => {
     try {
       localStorage.setItem(
@@ -595,6 +618,26 @@ export default function DiscountPage() {
       );
     } catch (_e) { /* ignore */ }
   }, [discountPercent, vipTag, vipSegmentId, startsAt, endsAt, fnPercent]);
+
+  // Toasts for results
+  useEffect(() => {
+    if (fnFetcher.state === "idle" && fnFetcher.data) {
+      shopify.toast.show(
+        fnFetcher.data.ok ? fnFetcher.data.message : (fnFetcher.data.errors ?? []).map((e) => e.message).join(", "),
+        { isError: !fnFetcher.data.ok },
+      );
+    }
+  }, [fnFetcher.state, fnFetcher.data, shopify]);
+
+  useEffect(() => {
+    if (fetcher.state === "idle" && fetcher.data) {
+      const created = fetcher.data.applied?.length ?? 0;
+      shopify.toast.show(`${created} discount code${created === 1 ? "" : "s"} created`, {
+        isError: created === 0,
+      });
+      if (created > 0) setSelected({});
+    }
+  }, [fetcher.state, fetcher.data, shopify]);
 
   const selectedIds = useMemo(
     () => Object.keys(selected).filter((id) => selected[id]),
@@ -611,24 +654,28 @@ export default function DiscountPage() {
     [products, vipActiveByProduct],
   );
 
+  const visibleProducts = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return q ? availableProducts.filter((p) => p.name.toLowerCase().includes(q)) : availableProducts;
+  }, [availableProducts, search]);
+
   const percent = toNumber(discountPercent);
   const result = fetcher.data;
+  const allVisibleSelected = visibleProducts.length > 0 && visibleProducts.every((p) => selected[p.id]);
 
   const toggleProduct = (productId) => {
     setSelected((prev) => ({ ...prev, [productId]: !prev[productId] }));
   };
 
-  const toggleAll = (checked) => {
-    const next = {};
-    for (const p of availableProducts) {
-      next[p.id] = checked;
-    }
-    setSelected(next);
+  const toggleAllVisible = (checked) => {
+    setSelected((prev) => {
+      const next = { ...prev };
+      for (const p of visibleProducts) next[p.id] = checked;
+      return next;
+    });
   };
 
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    
+  const handleSubmit = () => {
     const fd = new FormData();
     fd.set("selected_products", JSON.stringify(selectedIds));
     fd.set("discount_percent", discountPercent);
@@ -636,12 +683,10 @@ export default function DiscountPage() {
     if (vipSegmentId) fd.set("vip_segment_id", vipSegmentId);
     if (startsAt) fd.set("starts_at", startsAt);
     if (endsAt) fd.set("ends_at", endsAt);
-
     fetcher.submit(fd, { method: "POST" });
   };
 
-  const handleFnSubmit = (e) => {
-    e.preventDefault();
+  const handleFnSubmit = () => {
     const fd = new FormData();
     fd.set("_action", "configure_function");
     fd.set("function_percent", fnPercent || discountPercent);
@@ -649,303 +694,301 @@ export default function DiscountPage() {
     fnFetcher.submit(fd, { method: "POST" });
   };
 
+  const autoActive = vipAutoDiscountInfo.exists && vipAutoDiscountInfo.status === "ACTIVE";
+  const fnSaving = fnFetcher.state !== "idle";
+  const codesSaving = fetcher.state !== "idle";
+
   return (
-    <div style={{ maxWidth: 1200, margin: "2rem auto", padding: "0 1rem" }}>
-      <h2>VIP Discount Manager</h2>
-      <p>Use auto pricing for logged-in VIP customers. Legacy code discounts remain below only for manual fallback.</p>
+    <s-page heading="VIP pricing">
+      <s-link slot="breadcrumb-actions" href="/app">Dashboard</s-link>
+      <s-button
+        slot="primary-action"
+        variant="primary"
+        onClick={handleFnSubmit}
+        {...(fnSaving ? { loading: true } : {})}
+      >
+        {vipAutoDiscountInfo.exists ? "Save auto-pricing" : "Activate auto-pricing"}
+      </s-button>
 
       {loaderError && (
-        <div style={{ marginBottom: 16, padding: 12, backgroundColor: "#ffebee", borderRadius: 4, color: "#b71c1c" }}>
-          <strong>Load error:</strong> {loaderError}
-        </div>
+        <s-banner heading="Some data could not be loaded" tone="critical">
+          {loaderError}
+        </s-banner>
       )}
 
-      {activeProducts.length > 0 && (
-        <div style={{ marginBottom: 20 }}>
-          <h3 style={{ marginBottom: 8 }}>Active Discount Products ({activeProducts.length})</h3>
-          <table border="1" cellPadding="10" cellSpacing="0" style={{ width: "100%" }}>
-            <thead>
-              <tr style={{ backgroundColor: "#f0f8f5" }}>
-                <th>Product</th>
-                <th>Price</th>
-                <th>Compare-at</th>
-                <th>Active Code</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {activeProducts.map((p) => {
-                const activeInfo = vipActiveByProduct[p.id];
-                return (
-                  <tr key={p.id}>
-                    <td>{p.name}</td>
-                    <td>${p.price.toFixed(2)}</td>
-                    <td>${p.compareAtPrice ? p.compareAtPrice.toFixed(2) : "-"}</td>
-                    <td>{activeInfo?.code || "-"}</td>
-                    <td style={{ color: "#0b6e4f" }}>✓ Active</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      {/* ── VIP Auto-Discount Function Panel ── */}
-      <div
-        style={{
-          marginBottom: 24,
-          padding: 16,
-          borderRadius: 4,
-          border: "2px solid",
-          borderColor: vipAutoDiscountInfo.exists ? "#0b6e4f" : "#666",
-          backgroundColor: vipAutoDiscountInfo.exists ? "#e8f5e9" : "#f9f9f9",
-        }}
-      >
-        <h3 style={{ marginTop: 0 }}>
-          {vipAutoDiscountInfo.exists
-            ? `✓ VIP Auto-Pricing Active — ${vipAutoDiscountInfo.percentage ?? "?"}% (${vipAutoDiscountInfo.status})`
-            : "⭐ VIP Auto-Pricing Function (Recommended)"}
-        </h3>
-        <p style={{ marginTop: 0, marginBottom: 12, color: "#444" }}>
-          Automatically applies VIP pricing to ALL products in cart for logged-in customers with{" "}
-          <strong>{vipTag || VIP_DEFAULT_TAG}</strong> tag. No discount codes needed. Blocks other discounts from stacking.
-        </p>
-        <form onSubmit={handleFnSubmit} style={{ display: "flex", alignItems: "flex-end", gap: 12, flexWrap: "wrap" }}>
-          <div>
-            <label htmlFor="fn-pct" style={{ display: "block", marginBottom: 4 }}>
-              VIP Discount %
-            </label>
-            <input
-              id="fn-pct"
-              type="number"
-              min="1"
-              max="99"
-              step="0.01"
+      {/* ── Auto pricing (recommended) ── */}
+      <s-section heading="Automatic VIP pricing">
+        <s-stack gap="base">
+          <s-stack direction="inline" gap="small-200" alignItems="center">
+            <s-text type="strong">Status</s-text>
+            {vipAutoDiscountInfo.exists ? (
+              <s-badge tone={autoActive ? "success" : "warning"}>
+                {autoActive ? "Active" : formatStatus(vipAutoDiscountInfo.status)}
+              </s-badge>
+            ) : (
+              <s-badge>Not set up</s-badge>
+            )}
+            {vipAutoDiscountInfo.percentage != null && (
+              <s-badge tone="info">{vipAutoDiscountInfo.percentage}% off</s-badge>
+            )}
+            <s-badge>Recommended</s-badge>
+          </s-stack>
+          <s-paragraph color="subdued">
+            Logged-in customers tagged <s-text type="strong">{vipTag || VIP_DEFAULT_TAG}</s-text> automatically
+            get this discount on every product in their cart. No codes needed. Other discounts
+            don&apos;t combine with it.
+          </s-paragraph>
+          <s-box maxInlineSize="240px">
+            <s-number-field
+              label="VIP discount"
+              suffix="%"
+              min={1}
+              max={99}
+              step={0.01}
               placeholder={discountPercent || "25"}
               value={fnPercent}
-              onChange={(e) => setFnPercent(e.target.value)}
-              style={{ width: 100, padding: 6 }}
+              onInput={(e) => setFnPercent(e.currentTarget.value)}
             />
-          </div>
-          <button
-            type="submit"
-            disabled={fnFetcher.state === "submitting"}
-            style={{
-              padding: "8px 18px",
-              backgroundColor: "#0066cc",
-              color: "white",
-              border: "none",
-              borderRadius: 4,
-              cursor: "pointer",
-            }}
-          >
-            {fnFetcher.state === "submitting"
-              ? "Saving..."
-              : vipAutoDiscountInfo.exists
-                ? "Update VIP Auto-Pricing"
-                : "Activate VIP Auto-Pricing"}
-          </button>
-        </form>
-        {fnFetcher.data && (
-          <div
-            style={{
-              marginTop: 10,
-              color: fnFetcher.data.ok ? "#0b6e4f" : "#b71c1c",
-            }}
-          >
-            {fnFetcher.data.ok
-              ? `✓ ${fnFetcher.data.message}`
-              : (fnFetcher.data.errors ?? []).map((e) => e.message).join(", ")}
-          </div>
-        )}
-      </div>
+          </s-box>
+        </s-stack>
+      </s-section>
 
-      <div style={{ marginBottom: 24, padding: 12, borderRadius: 4, backgroundColor: "#fff8e1", color: "#7a5d00" }}>
-        Cart અને checkout માં ભાવ દેખાડવા માટે ઉપરનું auto-pricing activate કરવું જરૂરી છે. નીચેનો per-product code flow cart માં પોતાના આપ લાગતો નથી.
-      </div>
-
-      <form onSubmit={handleSubmit}>
-        <fieldset style={{ border: "1px solid #ccc", padding: 16, marginBottom: 20, borderRadius: 4, opacity: 0.85 }}>
-          <legend>Legacy Manual Code Settings</legend>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 16 }}>
-            <div>
-              <label htmlFor="pct">Discount %</label>
-              <input
-                id="pct"
-                type="number"
-                min="0"
-                max="100"
-                step="0.01"
-                value={discountPercent}
-                onChange={(e) => setDiscountPercent(e.target.value)}
-                style={{ width: "100%", padding: 6 }}
-              />
-            </div>
-            <div>
-              <label htmlFor="vip-tag">VIP Customer Tag</label>
-              <input
-                id="vip-tag"
-                type="text"
-                value={vipTag}
-                onChange={(e) => setVipTag(e.target.value)}
-                style={{ width: "100%", padding: 6 }}
-              />
-            </div>
-            <div>
-              <label htmlFor="vip-segment-id">VIP Segment ID (optional)</label>
-              <input
-                id="vip-segment-id"
-                type="text"
-                placeholder="gid://shopify/Segment/..."
-                value={vipSegmentId}
-                onChange={(e) => setVipSegmentId(e.target.value)}
-                style={{ width: "100%", padding: 6 }}
-              />
-            </div>
-            <div>
-              <label htmlFor="start">Start Date</label>
-              <input
-                id="start"
-                type="datetime-local"
-                value={startsAt}
-                onChange={(e) => setStartsAt(e.target.value)}
-                style={{ width: "100%", padding: 6 }}
-              />
-            </div>
-            <div>
-              <label htmlFor="end">End Date</label>
-              <input
-                id="end"
-                type="datetime-local"
-                value={endsAt}
-                onChange={(e) => setEndsAt(e.target.value)}
-                style={{ width: "100%", padding: 6 }}
-              />
-            </div>
-          </div>
-        </fieldset>
-
-        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12, flexWrap: "wrap" }}>
-          <button
-            type="submit"
-            disabled={fetcher.state === "submitting" || selectedIds.length === 0}
-            style={{
-              padding: "10px 24px",
-              fontSize: 15,
-              fontWeight: "bold",
-              backgroundColor: selectedIds.length === 0 ? "#ccc" : "#0066cc",
-              color: "white",
-              border: "none",
-              borderRadius: 4,
-              cursor: selectedIds.length === 0 ? "not-allowed" : "pointer",
-            }}
-          >
-            {fetcher.state === "submitting"
-              ? "Creating..."
-              : selectedIds.length > 0
-                ? `Create Legacy Code (${selectedIds.length} product${selectedIds.length > 1 ? "s" : ""})`
-                : "Create Legacy Code"}
-          </button>
-          <button type="button" onClick={() => toggleAll(true)} style={{ padding: "6px 12px" }}>
-            Select All
-          </button>
-          <button type="button" onClick={() => toggleAll(false)} style={{ padding: "6px 12px" }}>
-            Clear All
-          </button>
-        </div>
-
-        <table border="1" cellPadding="12" cellSpacing="0" style={{ width: "100%", marginBottom: 16 }}>
-          <thead>
-            <tr style={{ backgroundColor: "#f5f5f5" }}>
-              <th style={{ width: 40 }}>✓</th>
-              <th>Product</th>
-              <th>Price</th>
-              <th>Compare-at</th>
-              <th>Target @ {percent}%</th>
-              <th>Discount $</th>
-              <th>Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {availableProducts.map((p) => {
-              const calc = computeTargetAndFixedDiscount(p.price, p.compareAtPrice, percent);
-              return (
-                <tr key={p.id}>
-                  <td>
-                    <input
-                      type="checkbox"
-                      checked={Boolean(selected[p.id])}
-                      onChange={() => toggleProduct(p.id)}
-                    />
-                  </td>
-                  <td>{p.name}</td>
-                  <td>${p.price.toFixed(2)}</td>
-                  <td>${p.compareAtPrice ? p.compareAtPrice.toFixed(2) : "-"}</td>
-                  <td>${calc.targetPrice.toFixed(2)}</td>
-                  <td>${calc.fixedAmount.toFixed(2)}</td>
-                  <td>
-                    <span style={{ color: calc.shouldApply ? "green" : "red" }}>
-                      {calc.shouldApply ? "✓" : "✗"} {calc.reason || "OK"}
-                    </span>
-                  </td>
-                </tr>
-              );
-            })}
-            {availableProducts.length === 0 && (
-              <tr>
-                <td colSpan={7} style={{ textAlign: "center", color: "#666" }}>
-                  No pending products. All loaded products already have active discounts.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-
-
-      </form>
-
-      {result && (
-        <div style={{ marginTop: 32, padding: 20, backgroundColor: result.ok ? "#e8f5e9" : "#ffebee", borderRadius: 4 }}>
-          <h3>Result</h3>
-          <p style={{ marginTop: 0 }}>
-            Legacy code result. Auto cart pricing works only from the top VIP Auto-Pricing panel for logged-in customers with tag <strong>{vipTag}</strong>.
-          </p>
-
-          {result.applied?.length > 0 && (
-            <div style={{ marginBottom: 16 }}>
-              <h4>Created ({result.applied.length}):</h4>
-              <ul>
-                {result.applied.map((item, idx) => (
-                  <li key={idx}>
-                    <code>{item.code}</code>
-                    {" — "}
-                    {item.productName}
-                    {" | "}
-                    {item.percentage}% requested → {item.effectivePercentage}% applied
-                    {" | "}
-                    Target: ${item.targetPrice}
-                    {item.segmentRestricted ? " | VIP segment restricted" : " | All customers (add Segment ID to restrict)"}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          {result.errors?.length > 0 && (
-            <div>
-              <h4>Errors ({result.errors.length}):</h4>
-              <ul>
-                {result.errors.map((err, idx) => (
-                  <li key={idx} style={{ color: "red" }}>
-                    {err.code ? `${err.code}: ` : ""}{err.message}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-        </div>
+      {/* ── Active codes ── */}
+      {activeProducts.length > 0 && (
+        <s-section heading={`Products with active VIP codes (${activeProducts.length})`} padding="none">
+          <s-table>
+            <s-table-header-row>
+              <s-table-header listSlot="primary">Product</s-table-header>
+              <s-table-header format="currency">Price</s-table-header>
+              <s-table-header format="currency">Compare-at</s-table-header>
+              <s-table-header listSlot="secondary">Code</s-table-header>
+              <s-table-header>Status</s-table-header>
+            </s-table-header-row>
+            <s-table-body>
+              {activeProducts.map((p) => {
+                const info = vipActiveByProduct[p.id];
+                return (
+                  <s-table-row key={p.id}>
+                    <s-table-cell>{p.name}</s-table-cell>
+                    <s-table-cell>{money(p.price)}</s-table-cell>
+                    <s-table-cell>{p.compareAtPrice ? money(p.compareAtPrice) : "—"}</s-table-cell>
+                    <s-table-cell>{info?.code || "—"}</s-table-cell>
+                    <s-table-cell>
+                      <s-badge tone={info?.status === "ACTIVE" ? "success" : undefined}>
+                        {formatStatus(info?.status)}
+                      </s-badge>
+                    </s-table-cell>
+                  </s-table-row>
+                );
+              })}
+            </s-table-body>
+          </s-table>
+        </s-section>
       )}
-    </div>
+
+      {/* ── Manual codes (legacy) ── */}
+      <s-section heading="Manual discount codes">
+        <s-stack gap="base">
+          <s-paragraph color="subdued">
+            Creates a separate discount code for each selected product. Customers must enter the
+            code at checkout. Use this only when automatic pricing doesn&apos;t fit.
+          </s-paragraph>
+          <s-grid gridTemplateColumns="repeat(auto-fit, minmax(200px, 1fr))" gap="base">
+            <s-number-field
+              label="Discount"
+              suffix="%"
+              min={1}
+              max={100}
+              step={0.01}
+              value={discountPercent}
+              onInput={(e) => setDiscountPercent(e.currentTarget.value)}
+            />
+            <s-text-field
+              label="VIP customer tag"
+              value={vipTag}
+              onInput={(e) => setVipTag(e.currentTarget.value)}
+            />
+            <s-text-field
+              label="Customer segment ID"
+              details="Optional. Limits codes to this segment."
+              placeholder="gid://shopify/Segment/…"
+              value={vipSegmentId}
+              onInput={(e) => setVipSegmentId(e.currentTarget.value)}
+            />
+          </s-grid>
+          <s-grid gridTemplateColumns="repeat(auto-fit, minmax(200px, 1fr))" gap="base">
+            <DateTimeInput id="vip-start" label="Start date" value={startsAt} onChange={setStartsAt} />
+            <DateTimeInput id="vip-end" label="End date (optional)" value={endsAt} onChange={setEndsAt} />
+          </s-grid>
+        </s-stack>
+      </s-section>
+
+      <s-section padding="none">
+        <s-box padding="base">
+          <s-stack direction="inline" justifyContent="space-between" alignItems="center" gap="base">
+            <s-box inlineSize="100%" maxInlineSize="360px">
+              <s-search-field
+                label="Search products"
+                labelAccessibilityVisibility="exclusive"
+                placeholder="Search products"
+                value={search}
+                onInput={(e) => setSearch(e.currentTarget.value)}
+              />
+            </s-box>
+            <s-stack direction="inline" gap="small-200" alignItems="center">
+              {selectedIds.length > 0 && <s-text color="subdued">{selectedIds.length} selected</s-text>}
+              <s-button
+                onClick={handleSubmit}
+                {...(codesSaving ? { loading: true } : {})}
+                {...(selectedIds.length === 0 ? { disabled: true } : {})}
+              >
+                Create codes{selectedIds.length ? ` (${selectedIds.length})` : ""}
+              </s-button>
+            </s-stack>
+          </s-stack>
+        </s-box>
+
+        {visibleProducts.length === 0 ? (
+          <s-box padding="large-200">
+            <s-stack alignItems="center" gap="small-200">
+              <s-heading>No products found</s-heading>
+              <s-text color="subdued">
+                {search ? "Try a different search." : "All products already have an active VIP code."}
+              </s-text>
+            </s-stack>
+          </s-box>
+        ) : (
+          <s-table>
+            <s-table-header-row>
+              <s-table-header>
+                <s-checkbox
+                  accessibilityLabel="Select all products"
+                  checked={allVisibleSelected}
+                  onChange={(e) => toggleAllVisible(e.currentTarget.checked)}
+                />
+              </s-table-header>
+              <s-table-header listSlot="primary">Product</s-table-header>
+              <s-table-header format="currency">Price</s-table-header>
+              <s-table-header format="currency">Compare-at</s-table-header>
+              <s-table-header format="currency">VIP price at {percent}%</s-table-header>
+              <s-table-header listSlot="secondary">Eligibility</s-table-header>
+            </s-table-header-row>
+            <s-table-body>
+              {visibleProducts.map((p) => {
+                const calc = computeTargetAndFixedDiscount(p.price, p.compareAtPrice, percent);
+                return (
+                  <s-table-row key={p.id}>
+                    <s-table-cell>
+                      <s-checkbox
+                        accessibilityLabel={`Select ${p.name}`}
+                        checked={Boolean(selected[p.id])}
+                        onChange={() => toggleProduct(p.id)}
+                      />
+                    </s-table-cell>
+                    <s-table-cell>{p.name}</s-table-cell>
+                    <s-table-cell>{money(p.price)}</s-table-cell>
+                    <s-table-cell>{p.compareAtPrice ? money(p.compareAtPrice) : "—"}</s-table-cell>
+                    <s-table-cell>{money(calc.targetPrice)}</s-table-cell>
+                    <s-table-cell>
+                      {calc.shouldApply ? (
+                        <s-badge tone="success">Eligible · saves {money(calc.fixedAmount)}</s-badge>
+                      ) : (
+                        <s-tooltip id={`why-${p.id}`}>{calc.reason}</s-tooltip>
+                      )}
+                      {!calc.shouldApply && (
+                        <s-badge tone="warning" interestFor={`why-${p.id}`}>Not eligible</s-badge>
+                      )}
+                    </s-table-cell>
+                  </s-table-row>
+                );
+              })}
+            </s-table-body>
+          </s-table>
+        )}
+      </s-section>
+
+      {result && fetcher.state === "idle" && (
+        <s-section heading="Last result">
+          <s-stack gap="base">
+            {result.applied?.length > 0 && (
+              <s-banner tone="success" heading={`${result.applied.length} codes created`}>
+                <s-unordered-list>
+                  {result.applied.map((item, idx) => (
+                    <s-list-item key={idx}>
+                      <s-text type="strong">{item.code}</s-text> — {item.productName} · VIP price{" "}
+                      {money(item.targetPrice)}
+                      {item.segmentRestricted ? " · Segment only" : " · Any customer with the code"}
+                    </s-list-item>
+                  ))}
+                </s-unordered-list>
+              </s-banner>
+            )}
+            {result.errors?.length > 0 && (
+              <s-banner tone="critical" heading={`${result.errors.length} products were skipped`}>
+                <s-unordered-list>
+                  {result.errors.map((err, idx) => (
+                    <s-list-item key={idx}>{err.code ? `${err.code}: ` : ""}{err.message}</s-list-item>
+                  ))}
+                </s-unordered-list>
+              </s-banner>
+            )}
+          </s-stack>
+        </s-section>
+      )}
+
+      <s-section slot="aside" heading="Which option should I use?">
+        <s-stack gap="small-200">
+          <s-paragraph>
+            <s-text type="strong">Automatic pricing</s-text> applies in cart and checkout for tagged,
+            logged-in customers. Best for most stores.
+          </s-paragraph>
+          <s-paragraph>
+            <s-text type="strong">Manual codes</s-text> need the customer to enter a code. Add a segment
+            ID so only VIP customers can use them.
+          </s-paragraph>
+        </s-stack>
+      </s-section>
+
+      <s-section slot="aside" heading="Show VIP prices on your store">
+        <s-paragraph>
+          Add the VIP price block to your product page in the theme editor so VIP customers see their
+          price before checkout.
+        </s-paragraph>
+        <s-button href="shopify://admin/themes/current/editor?context=apps" target="_blank">
+          Open theme editor
+        </s-button>
+      </s-section>
+    </s-page>
   );
 }
+
+function DateTimeInput({ id, label, value, onChange }) {
+  return (
+    <s-stack gap="small-300">
+      <label htmlFor={id}>
+        <s-text>{label}</s-text>
+      </label>
+      <input
+        id={id}
+        type="datetime-local"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        style={{
+          font: "inherit",
+          padding: "6px 10px",
+          minHeight: 32,
+          border: "1px solid #8a8a8a",
+          borderRadius: 8,
+          background: "#fff",
+        }}
+      />
+    </s-stack>
+  );
+}
+
+function formatStatus(status) {
+  if (!status) return "Unknown";
+  return status.charAt(0) + status.slice(1).toLowerCase();
+}
+
+export const headers = (headersArgs) => boundary.headers(headersArgs);
