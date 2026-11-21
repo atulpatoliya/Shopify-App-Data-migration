@@ -1,15 +1,15 @@
 import { Outlet, useLoaderData, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
-import { appApiKey, authenticate } from "../shopify.server";
+import { appApiKey, authenticate, PLAN_LIMITS_ENABLED } from "../shopify.server";
 
 export const loader = async ({ request }) => {
   await authenticate.admin(request);
-  return { apiKey: appApiKey };
+  return { apiKey: appApiKey, showPlans: PLAN_LIMITS_ENABLED };
 };
 
 export default function App() {
-  const { apiKey } = useLoaderData();
+  const { apiKey, showPlans } = useLoaderData();
 
   return (
     <AppProvider embedded apiKey={apiKey}>
@@ -18,7 +18,8 @@ export default function App() {
         <s-link href="/app/export">Export products</s-link>
         <s-link href="/app/import">Import products</s-link>
         <s-link href="/app/discount">VIP pricing</s-link>
-        <s-link href="/app/plans">Plans</s-link>
+        {/* Plans only for the public App Store app (custom app is unlimited) */}
+        {showPlans && <s-link href="/app/plans">Plans</s-link>}
         <s-link href="/app/help">Help &amp; support</s-link>
       </s-app-nav>
       <Outlet />

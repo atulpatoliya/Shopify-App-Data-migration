@@ -68,7 +68,10 @@ export default function HelpPage() {
           This app reads product and customer segment data only to provide its features. Customer
           personal data isn&apos;t stored by the app.
         </s-paragraph>
-        <s-link href="/privacy" target="_blank">Read the privacy policy</s-link>
+        <s-stack gap="small-200">
+          <s-link href="/privacy" target="_blank">Privacy policy</s-link>
+          <s-link href="/terms" target="_blank">Terms of service</s-link>
+        </s-stack>
       </s-section>
     </s-page>
   );

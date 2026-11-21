@@ -4,13 +4,15 @@ import { useLoaderData, useNavigation, useSubmit, useFetcher } from "react-route
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
+import { getCurrentPlan, planSelectionUrl } from "../plans.server";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SERVER: Loader — only counts, so the page opens fast on any catalog size.
 // The full product data is fetched page by page when you export (see action).
 // ─────────────────────────────────────────────────────────────────────────────
 export const loader = async ({ request }) => {
-  const { admin } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
+  const plan = await getCurrentPlan(admin);
 
   const url = new URL(request.url);
   const query = url.searchParams.get("query") || "";
@@ -34,6 +36,8 @@ export const loader = async ({ request }) => {
   const d = statsJson.data;
 
   return {
+    plan,
+    changePlanUrl: planSelectionUrl(session.shop),
     appliedQuery: query,
     matchingCount: d.matchingProducts?.count ?? 0,
     productStats: {
@@ -104,10 +108,16 @@ export const action = async ({ request }) => {
   const form = await request.formData();
   const after = String(form.get("cursor") || "") || null;
   const query = String(form.get("query") || "").trim() || null;
+  const collected = Number(form.get("collected") || 0);
+
+  // Plan limit is enforced here on the server, not only in the browser.
+  const plan = await getCurrentPlan(admin);
+  const remaining = plan.limit == null ? Infinity : plan.limit - collected;
+  if (remaining <= 0) return { products: [], hasNextPage: false, limited: true };
 
   try {
     const res = await admin.graphql(EXPORT_PAGE_QUERY, {
-      variables: { first: PAGE_SIZE, after, query },
+      variables: { first: Math.min(PAGE_SIZE, remaining), after, query },
     });
     const json = await res.json();
     const page = json.data.products;
@@ -135,9 +145,11 @@ export const action = async ({ request }) => {
       });
     }
 
+    const reachedLimit = plan.limit != null && collected + products.length >= plan.limit;
     return {
       products,
-      hasNextPage: page.pageInfo.hasNextPage,
+      hasNextPage: page.pageInfo.hasNextPage && !reachedLimit,
+      limited: reachedLimit && page.pageInfo.hasNextPage,
       cursor: page.pageInfo.endCursor,
     };
   } catch (err) {
@@ -338,7 +350,10 @@ async function downloadExcel(products, selectedFields) {
 // COMPONENT
 // ─────────────────────────────────────────────────────────────────────────────
 export default function ExportPage() {
-  const { appliedQuery, matchingCount, productStats } = useLoaderData();
+  const { appliedQuery, matchingCount, productStats, plan, changePlanUrl } = useLoaderData();
+  // Number of products this export will include under the merchant's plan.
+  const exportCount = plan.limit == null ? matchingCount : Math.min(matchingCount, plan.limit);
+  const overLimit = plan.limit != null && matchingCount > plan.limit;
   const shopify = useAppBridge();
   const pageFetcher = useFetcher();
 
@@ -380,7 +395,7 @@ export default function ExportPage() {
     collectedRef.current = [];
     setProgress(0);
     setExporting(true);
-    pageFetcher.submit({ query: appliedQuery }, { method: "POST" });
+    pageFetcher.submit({ query: appliedQuery, collected: 0 }, { method: "POST" });
   };
 
   useEffect(() => {
@@ -397,7 +412,10 @@ export default function ExportPage() {
     setProgress(collectedRef.current.length);
 
     if (data.hasNextPage) {
-      pageFetcher.submit({ query: appliedQuery, cursor: data.cursor }, { method: "POST" });
+      pageFetcher.submit(
+        { query: appliedQuery, cursor: data.cursor, collected: collectedRef.current.length },
+        { method: "POST" },
+      );
       return;
     }
 
@@ -425,12 +443,20 @@ export default function ExportPage() {
         {...(busy ? { loading: true } : {})}
         {...(matchingCount === 0 ? { disabled: true } : {})}
       >
-        Export {matchingCount.toLocaleString()} products
+        Export {exportCount.toLocaleString()} products
       </s-button>
+
+      {overLimit && (
+        <s-banner heading={`Your ${plan.name} plan exports up to ${plan.limit.toLocaleString()} products`} tone="warning">
+          {matchingCount.toLocaleString()} products match. The first {plan.limit.toLocaleString()} will be
+          exported.{" "}
+          <s-link href={changePlanUrl} target="_top">Upgrade your plan</s-link> to export more.
+        </s-banner>
+      )}
 
       {exporting && (
         <s-banner heading="Preparing your export…" tone="info">
-          Loaded {progress.toLocaleString()} of {matchingCount.toLocaleString()} products. The file
+          Loaded {progress.toLocaleString()} of {exportCount.toLocaleString()} products. The file
           downloads automatically when it&apos;s ready. Keep this page open.
         </s-banner>
       )}

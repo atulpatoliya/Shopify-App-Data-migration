@@ -8,7 +8,7 @@ export const loader = () => ({
   updated: "2026-11-21",
 });
 
-export const meta = () => [{ title: "Privacy policy – Data Migration" }];
+export const meta = () => [{ title: "Privacy policy – Bulk Migration & VIP Pricing" }];
 
 export default function Privacy() {
   const { supportEmail, updated } = useLoaderData();
@@ -18,7 +18,7 @@ export default function Privacy() {
       <p style={{ color: "#616161" }}>Last updated: {updated}</p>
 
       <p>
-        Data Migration (&quot;the App&quot;) helps Shopify merchants export and import product data and
+        Bulk Migration &amp; VIP Pricing (&quot;the App&quot;) helps Shopify merchants export and import product data and
         manage VIP pricing. This policy explains what information the App accesses and how it is used.
       </p>
 
@@ -52,6 +52,9 @@ export default function Privacy() {
       <h2>Contact</h2>
       <p>
         Questions about this policy: <a href={`mailto:${supportEmail}`}>{supportEmail}</a>
+      </p>
+      <p>
+        See also our <a href="/terms">terms of service</a>, which include our data processing agreement.
       </p>
     </main>
   );

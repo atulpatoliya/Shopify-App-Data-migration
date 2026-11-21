@@ -3,12 +3,14 @@ import { useLoaderData, useFetcher } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
+import { getCurrentPlan, planSelectionUrl } from "../plans.server";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SERVER: Loader — fetch lightweight product identifiers for client-side matching
 // ─────────────────────────────────────────────────────────────────────────────
 export const loader = async ({ request }) => {
-  const { admin } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
+  const plan = await getCurrentPlan(admin);
 
   const allProducts = [];
   let hasNextPage = true;
@@ -34,7 +36,7 @@ export const loader = async ({ request }) => {
     after = page.pageInfo.endCursor;
   }
 
-  return { existingProducts: allProducts };
+  return { existingProducts: allProducts, plan, changePlanUrl: planSelectionUrl(session.shop) };
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -50,7 +52,11 @@ export const action = async ({ request }) => {
     return Response.json({ updated: 0, errors: [{ message: "Invalid JSON body" }] });
   }
 
-  const { matchedRows = [] } = body;
+  const plan = await getCurrentPlan(admin);
+  const allRows = Array.isArray(body.matchedRows) ? body.matchedRows : [];
+  // Plan limit enforced on the server: rows beyond the limit are not updated.
+  const matchedRows = plan.limit == null ? allRows : allRows.slice(0, plan.limit);
+  const skippedByPlan = allRows.length - matchedRows.length;
   const results = [];
   const errors = [];
 
@@ -102,7 +108,7 @@ export const action = async ({ request }) => {
     }
   }
 
-  return Response.json({ updated: results.length, errors });
+  return Response.json({ updated: results.length, errors, skippedByPlan });
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -120,7 +126,7 @@ const PREVIEW_LIMIT = 50;
 // COMPONENT
 // ─────────────────────────────────────────────────────────────────────────────
 export default function ImportPage() {
-  const { existingProducts } = useLoaderData();
+  const { existingProducts, plan, changePlanUrl } = useLoaderData();
   const fetcher = useFetcher();
   const shopify = useAppBridge();
 
@@ -214,7 +220,7 @@ export default function ImportPage() {
   const handleImport = () => {
     if (!matchResult?.matched?.length) return;
     fetcher.submit(
-      { matchedRows: matchResult.matched },
+      { matchedRows: matchResult.matched.slice(0, updateCount) },
       { method: "POST", encType: "application/json" },
     );
     document.getElementById("confirm-import-modal")?.hideOverlay?.();
@@ -224,6 +230,8 @@ export default function ImportPage() {
   const missingMatchColumn = parsedRows && !columns.includes(matchOption.column);
   const updatableInFile = UPDATABLE_FIELDS.filter((f) => columns.includes(f));
   const matchedCount = matchResult?.matched?.length ?? 0;
+  const updateCount = plan.limit == null ? matchedCount : Math.min(matchedCount, plan.limit);
+  const overLimit = plan.limit != null && matchedCount > plan.limit;
   const unmatchedCount = matchResult?.unmatched?.length ?? 0;
   const previewRows = (previewTab === "matched" ? matchResult?.matched : matchResult?.unmatched) ?? [];
 
@@ -238,7 +246,7 @@ export default function ImportPage() {
         {...(importing ? { loading: true } : {})}
         {...(matchedCount < 1 ? { disabled: true } : {})}
       >
-        Update {matchedCount} products
+        Update {updateCount} products
       </s-button>
       <s-button slot="secondary-actions" href="/app/export">Export a template</s-button>
 
@@ -262,6 +270,13 @@ export default function ImportPage() {
           ) : (
             "All matched products were updated in Shopify."
           )}
+        </s-banner>
+      )}
+
+      {overLimit && (
+        <s-banner heading={`Your ${plan.name} plan updates up to ${plan.limit.toLocaleString()} products at a time`} tone="warning">
+          {matchedCount.toLocaleString()} rows match. The first {plan.limit.toLocaleString()} will be updated.{" "}
+          <s-link href={changePlanUrl} target="_top">Upgrade your plan</s-link> to update more at once.
         </s-banner>
       )}
 
@@ -420,11 +435,11 @@ export default function ImportPage() {
 
       <s-modal id="confirm-import-modal" heading="Update products in Shopify?">
         <s-paragraph>
-          {matchedCount} products will be updated with the values from {fileName || "your file"}.
+          {updateCount} products will be updated with the values from {fileName || "your file"}.
           This can&apos;t be undone automatically. Export a backup first if you&apos;re unsure.
         </s-paragraph>
         <s-button slot="primary-action" variant="primary" onClick={handleImport}>
-          Update {matchedCount} products
+          Update {updateCount} products
         </s-button>
         <s-button slot="secondary-actions" commandFor="confirm-import-modal" command="--hide">
           Cancel

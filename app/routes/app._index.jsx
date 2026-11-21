@@ -2,6 +2,7 @@
 import { useLoaderData } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
+import { getCurrentPlan } from "../plans.server";
 
 export const loader = async ({ request }) => {
   const { admin, session } = await authenticate.admin(request);
@@ -32,7 +33,10 @@ export const loader = async ({ request }) => {
     vipPercent = null;
   }
 
+  const plan = await getCurrentPlan(admin);
+
   return {
+    plan,
     shopName: d.shop?.name || session.shop,
     stats: {
       total: d.total?.count ?? 0,
@@ -73,7 +77,7 @@ const ACTIONS = [
 ];
 
 export default function Dashboard() {
-  const { shopName, stats, vip } = useLoaderData();
+  const { shopName, stats, vip, plan } = useLoaderData();
   const vipActive = vip.exists && vip.status === "ACTIVE";
 
   const steps = [
@@ -138,6 +142,20 @@ export default function Dashboard() {
           ))}
         </s-stack>
       </s-section>
+
+      {plan.enforced && (
+        <s-section slot="aside" heading="Your plan">
+          <s-stack gap="small-200">
+            <s-stack direction="inline" gap="small-200">
+              <s-badge tone="success">{plan.name}</s-badge>
+              <s-text color="subdued">
+                {plan.limit == null ? "Unlimited products" : `${plan.limit.toLocaleString()} products per export/import`}
+              </s-text>
+            </s-stack>
+            <s-link href="/app/plans">View plans</s-link>
+          </s-stack>
+        </s-section>
+      )}
 
       <s-section slot="aside" heading="VIP pricing">
         <s-stack gap="small-200">

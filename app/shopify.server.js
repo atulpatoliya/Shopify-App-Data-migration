@@ -7,39 +7,22 @@ if (existsSync(".env")) process.loadEnvFile(".env");
 import {
   ApiVersion,
   AppDistribution,
-  BillingInterval,
   shopifyApp,
 } from "@shopify/shopify-app-react-router/server";
 
 export const appApiKey = process.env.SHOPIFY_API_KEY || "";
 const appUrl = process.env.SHOPIFY_APP_URL || "";
 
-// ── Billing ────────────────────────────────────────────────────────────────
-// The app is free for now. Plans are defined here so billing can be switched on
-// later by setting BILLING_ENABLED=true (no code changes needed).
-// Note: Shopify billing only works for App Store / public apps, so also change
-// `distribution` below to AppDistribution.AppStore when you go public.
-export const BILLING_ENABLED = process.env.BILLING_ENABLED === "true";
-export const PRO_PLAN = "Pro";
-export const BILLING_IS_TEST = process.env.NODE_ENV !== "production";
+// Plans use Shopify Managed Pricing (configured in the Partner Dashboard), so the
+// app never calls the Billing API — it only reads the active plan (see plans.server.js).
+// Limits apply only to the public App Store app; the custom app stays unlimited.
+export const PLAN_LIMITS_ENABLED = process.env.APP_DISTRIBUTION === "app_store";
 export const APP_HANDLE = process.env.SHOPIFY_APP_HANDLE || "data-migration";
 // Set SUPPORT_EMAIL in your environment (.env / Render) to your real address.
 export const SUPPORT_EMAIL = process.env.SUPPORT_EMAIL || "support@example.com";
-export const PLANS = {
-  [PRO_PLAN]: {
-    trialDays: 7,
-    lineItems: [
-      {
-        amount: 9.99,
-        currencyCode: "USD",
-        interval: BillingInterval.Every30Days,
-      },
-    ],
-  },
-};
 
 // Sessions stored in local SQLite file — persists across restarts, no re-auth needed
-const sqliteStorage = new SQLiteSessionStorage("sessions.sqlite");
+const sqliteStorage = new SQLiteSessionStorage(process.env.SESSION_DB || "sessions.sqlite");
 
 const shopify = shopifyApp({
   apiKey: appApiKey,
@@ -49,8 +32,11 @@ const shopify = shopifyApp({
   appUrl,
   authPathPrefix: "/auth",
   sessionStorage: sqliteStorage,
-  distribution: AppDistribution.SingleMerchant,
-  billing: PLANS,
+  // APP_DISTRIBUTION=app_store for the public App Store app; the custom app keeps single_merchant.
+  distribution:
+    process.env.APP_DISTRIBUTION === "app_store"
+      ? AppDistribution.AppStore
+      : AppDistribution.SingleMerchant,
   future: {
     expiringOfflineAccessTokens: true,
   },
