@@ -3,7 +3,7 @@ import { useMemo, useState, useEffect } from "react";
 import { useLoaderData, useFetcher } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { useAppBridge } from "@shopify/app-bridge-react";
-import { authenticate } from "../shopify.server";
+import { appApiKey, authenticate, vipBlockUrl } from "../shopify.server";
 
 const VIP_FUNCTION_HANDLE = "vip-product-discount";
 const VIP_AUTO_TITLE = "VIP-AUTO-FUNCTION";
@@ -309,7 +309,7 @@ export const loader = async ({ request }) => {
     console.warn("Shop currency load skipped:", err.message);
   }
 
-  return { products: normalizedProducts, vipActiveByProduct, vipAutoDiscountInfo, currencyCode };
+  return { products: normalizedProducts, vipActiveByProduct, vipAutoDiscountInfo, currencyCode, addBlockUrl: vipBlockUrl(appApiKey) };
 };
 
 export const action = async ({ request }) => {
@@ -571,6 +571,7 @@ export default function DiscountPage() {
     vipAutoDiscountInfo = {},
     currencyCode = "USD",
     error: loaderError,
+    addBlockUrl,
   } = useLoaderData() || {};
   const fetcher = useFetcher();
   const fnFetcher = useFetcher();
@@ -966,14 +967,23 @@ export default function DiscountPage() {
         </s-stack>
       </s-section>
 
-      <s-section slot="aside" heading="Show VIP prices on your store">
-        <s-paragraph>
-          Add the VIP price block to your product page in the theme editor so VIP customers see their
-          price before checkout.
-        </s-paragraph>
-        <s-button href="shopify://admin/themes/current/editor?context=apps" target="_blank">
-          Open theme editor
-        </s-button>
+      <s-section slot="aside" heading="Show VIP prices on product pages">
+        <s-stack gap="small-200">
+          <s-paragraph>
+            Add the VIP Price Display block so logged-in VIP customers see their price before they add
+            to cart. Other customers don&apos;t see it.
+          </s-paragraph>
+          <s-ordered-list>
+            <s-list-item>Select <s-text type="strong">Add VIP block</s-text>. Your theme editor opens on a product page with the block added.</s-list-item>
+            <s-list-item>Drag the block under the product price.</s-list-item>
+            <s-list-item>Set <s-text type="strong">VIP discount percent</s-text> to the same value as above ({fnPercent || vipAutoDiscountInfo.percentage || discountPercent}%).</s-list-item>
+            <s-list-item>Select <s-text type="strong">Save</s-text> in the theme editor.</s-list-item>
+          </s-ordered-list>
+          <s-button variant="primary" href={addBlockUrl} target="_blank">Add VIP block</s-button>
+          <s-text color="subdued">
+            In the editor the block shows a sample price. On your store only tagged, logged-in customers see it.
+          </s-text>
+        </s-stack>
       </s-section>
     </s-page>
   );

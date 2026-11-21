@@ -19,7 +19,7 @@ function getTransport() {
 export async function sendMail({ to, subject, text, attachments }) {
   if (!mailConfigured()) throw new Error("Email (SMTP) is not configured on the server");
   await getTransport().sendMail({
-    from: `"Bulk Migration & VIP Pricing" <${process.env.SMTP_USER}>`,
+    from: `"Bulk Migration & VIP Discounts" <${process.env.SMTP_USER}>`,
     to,
     subject,
     text,

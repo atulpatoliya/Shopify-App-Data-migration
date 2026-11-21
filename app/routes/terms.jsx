@@ -8,7 +8,7 @@ export const loader = () => ({
   updated: "2026-11-22",
 });
 
-export const meta = () => [{ title: "Terms of service – Bulk Migration & VIP Pricing" }];
+export const meta = () => [{ title: "Terms of service – Bulk Migration & VIP Discounts" }];
 
 export default function Terms() {
   const { supportEmail, updated } = useLoaderData();
@@ -18,22 +18,23 @@ export default function Terms() {
       <p style={{ color: "#616161" }}>Last updated: {updated}</p>
 
       <p>
-        These terms apply to merchants who install Bulk Migration &amp; VIP Pricing (&quot;the App&quot;)
+        These terms apply to merchants who install Bulk Migration &amp; VIP Discounts (&quot;the App&quot;)
         on a Shopify store. By installing or using the App you agree to these terms and to our{" "}
         <a href="/privacy">privacy policy</a>.
       </p>
 
       <h2>1. The service</h2>
       <p>
-        The App lets you export product data to Excel, update existing products from a file, and offer
-        automatic pricing to customers you tag as VIP. Features may change over time; we will tell you
+        The App lets you export product data to Excel or CSV, create and update products from a file
+        (with a backup you can undo), email scheduled exports, and offer automatic discounts to
+        customers you tag as VIP. Features may change over time; we will tell you
         about changes that significantly affect how you use the App.
       </p>
 
       <h2>2. Your responsibilities</h2>
       <ul>
         <li>You are responsible for the data you import and the prices and discounts you configure.</li>
-        <li>Imports overwrite existing product values. Export a backup before large changes.</li>
+        <li>Imports overwrite existing product values. A backup is saved so an import can be undone from Import history.</li>
         <li>You must have the right to use any data you upload, and comply with Shopify&apos;s terms.</li>
       </ul>
 

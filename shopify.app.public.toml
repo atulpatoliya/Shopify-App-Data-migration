@@ -3,7 +3,7 @@
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration
 
 client_id = "bd1b1d070c509ee1e47ee4f68a9815e6"
-name = "Bulk Migration & VIP Pricing"
+name = "Bulk Migration & VIP Discounts"
 application_url = "https://public.130-210-71-11.sslip.io"
 embedded = true
 

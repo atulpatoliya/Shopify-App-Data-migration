@@ -10,23 +10,31 @@ export const loader = async ({ request }) => {
 const FAQ = [
   {
     q: "Does import create new products?",
-    a: "No. Import only updates products that already exist and match a row in your file by handle or title.",
+    a: "Yes. Rows that match an existing product (by handle or title) update it; other rows become new products, saved as Draft by default. You can turn creating off in the import settings.",
   },
   {
     q: "Which fields can be imported?",
-    a: "Title, vendor, product type, status, description, tags and handle. Empty cells are ignored.",
+    a: "Title, vendor, type, status, description, tags, handle, SEO, variant price, compare-at price, SKU, barcode, stock, images and product metafields. Empty cells are ignored.",
+  },
+  {
+    q: "Can I undo an import?",
+    a: "Yes. Every import saves a backup first. Open Import history and select Undo to restore the previous values and delete products the import created.",
+  },
+  {
+    q: "Can I import a Shopify product CSV?",
+    a: "Yes. Files in Shopify's product CSV format, for example from another store, are detected automatically. You can also export in that format.",
   },
   {
     q: "How do VIP customers get their price?",
-    a: "Tag a customer with the VIP tag (default vip_customer). When they log in, automatic VIP pricing applies in cart and checkout.",
+    a: "Tag a customer with vip_customer. When they log in, the automatic VIP discount applies in cart and checkout.",
   },
   {
-    q: "Can VIP pricing combine with other discounts?",
-    a: "No. Automatic VIP pricing doesn't combine with other product, order or shipping discounts.",
+    q: "Do VIP discounts combine with other discounts?",
+    a: "No. The automatic VIP discount doesn't combine with other product, order or shipping discounts.",
   },
   {
     q: "What happens to my data if I uninstall?",
-    a: "We delete the app's session data for your store. Your products and discounts in Shopify are not changed.",
+    a: "Scheduled exports stop and the app's session data is deleted. Import history and backups are deleted 48 hours later. Your products and discounts in Shopify are not changed.",
   },
 ];
 
@@ -51,7 +59,9 @@ export default function HelpPage() {
       <s-section heading="Guides">
         <s-unordered-list>
           <s-list-item><s-link href="/app/export">Export products to Excel</s-link></s-list-item>
-          <s-list-item><s-link href="/app/import">Bulk update products from a file</s-link></s-list-item>
+          <s-list-item><s-link href="/app/import">Import, update or create products from a file</s-link></s-list-item>
+          <s-list-item><s-link href="/app/history">Undo an import</s-link></s-list-item>
+          <s-list-item><s-link href="/app/schedule">Email a product export every week</s-link></s-list-item>
           <s-list-item><s-link href="/app/discount">Set up VIP pricing</s-link></s-list-item>
         </s-unordered-list>
       </s-section>
@@ -65,8 +75,8 @@ export default function HelpPage() {
 
       <s-section slot="aside" heading="Privacy">
         <s-paragraph>
-          This app reads product and customer segment data only to provide its features. Customer
-          personal data isn&apos;t stored by the app.
+          This app reads product and customer tag data only to provide its features. It stores import
+          backups so you can undo; customer personal data isn&apos;t stored.
         </s-paragraph>
         <s-stack gap="small-200">
           <s-link href="/privacy" target="_blank">Privacy policy</s-link>

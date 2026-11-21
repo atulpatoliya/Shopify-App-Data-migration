@@ -8,7 +8,7 @@ export const loader = () => ({
   updated: "2026-11-22",
 });
 
-export const meta = () => [{ title: "Privacy policy – Bulk Migration & VIP Pricing" }];
+export const meta = () => [{ title: "Privacy policy – Bulk Migration & VIP Discounts" }];
 
 export default function Privacy() {
   const { supportEmail, updated } = useLoaderData();
@@ -18,7 +18,7 @@ export default function Privacy() {
       <p style={{ color: "#616161" }}>Last updated: {updated}</p>
 
       <p>
-        Bulk Migration &amp; VIP Pricing (&quot;the App&quot;) helps Shopify merchants export and import product data and
+        Bulk Migration &amp; VIP Discounts (&quot;the App&quot;) helps Shopify merchants export and import product data and
         manage VIP pricing. This policy explains what information the App accesses and how it is used.
       </p>
 

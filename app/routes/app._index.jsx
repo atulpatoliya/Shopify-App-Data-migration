@@ -1,7 +1,7 @@
 /* eslint-disable react/prop-types */
 import { useLoaderData } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
-import { authenticate } from "../shopify.server";
+import { appApiKey, authenticate, vipBlockUrl } from "../shopify.server";
 import { getCurrentPlan } from "../plans.server";
 
 export const loader = async ({ request }) => {
@@ -36,6 +36,7 @@ export const loader = async ({ request }) => {
   const plan = await getCurrentPlan(admin);
 
   return {
+    addBlockUrl: vipBlockUrl(appApiKey),
     plan,
     shopName: d.shop?.name || session.shop,
     stats: {
@@ -77,13 +78,14 @@ const ACTIONS = [
 ];
 
 export default function Dashboard() {
-  const { shopName, stats, vip, plan } = useLoaderData();
+  const { shopName, stats, vip, plan, addBlockUrl } = useLoaderData();
   const vipActive = vip.exists && vip.status === "ACTIVE";
 
   const steps = [
     { done: stats.total > 0, label: "Add products to your store", href: "shopify://admin/products" },
     { done: false, label: "Export a backup of your products", href: "/app/export" },
-    { done: vipActive, label: "Turn on automatic VIP pricing", href: "/app/discount" },
+    { done: vipActive, label: "Turn on automatic VIP discounts", href: "/app/discount" },
+    { done: false, label: "Add the VIP price block to product pages", href: addBlockUrl, external: true },
   ];
   const doneCount = steps.filter((s) => s.done).length;
 
@@ -137,7 +139,7 @@ export default function Dashboard() {
           {steps.map((s) => (
             <s-stack key={s.label} direction="inline" gap="small-200" alignItems="center">
               <s-icon type={s.done ? "check-circle-filled" : "circle"} tone={s.done ? "success" : undefined} />
-              <s-link href={s.href}>{s.label}</s-link>
+              <s-link href={s.href} {...(s.external ? { target: "_blank" } : {})}>{s.label}</s-link>
             </s-stack>
           ))}
         </s-stack>

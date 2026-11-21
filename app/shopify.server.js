@@ -11,6 +11,10 @@ import {
 } from "@shopify/shopify-app-react-router/server";
 
 export const appApiKey = process.env.SHOPIFY_API_KEY || "";
+// Theme editor deep link that adds the "VIP Price Display" app block to the product page.
+export const vipBlockUrl = (apiKey) =>
+  `shopify://admin/themes/current/editor?template=product&addAppBlockId=${apiKey}/star_rating&target=mainSection`;
+
 const appUrl = process.env.SHOPIFY_APP_URL || "";
 
 // Plans use Shopify Managed Pricing (configured in the Partner Dashboard), so the
