@@ -1,8 +1,10 @@
-# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
+# Public (App Store) version of the app.
+# Deploy with: npm run deploy
+# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration
 
-client_id = "b53146134177635764637aee7e13ae22"
-name = "Data Migration"
-application_url = "https://130-210-71-11.sslip.io"
+client_id = "bd1b1d070c509ee1e47ee4f68a9815e6"
+name = "Bulk Migration & VIP Discounts"
+application_url = "https://migration.letvarsolution.com"
 embedded = true
 
 [build]
@@ -26,6 +28,11 @@ api_version = "2026-04"
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
 scopes = "read_customers,read_inventory,read_locations,read_products,write_discounts,write_inventory,write_products"
+optional_scopes = [ ]
+use_legacy_install_flow = false
 
 [auth]
-redirect_urls = [ "https://130-210-71-11.sslip.io/auth/callback", "https://130-210-71-11.sslip.io/auth" ]
+redirect_urls = [
+  "https://migration.letvarsolution.com/auth/callback",
+  "https://migration.letvarsolution.com/auth"
+]

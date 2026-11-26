@@ -63,8 +63,8 @@ Redirect URL for every plan: /app
 3. Reward your best customers — VIP prices apply automatically, no discount codes needed.
 
 ## URLs
-- Privacy policy: https://public.130-210-71-11.sslip.io/privacy
-- Terms of service: https://public.130-210-71-11.sslip.io/terms
+- Privacy policy: https://migration.letvarsolution.com/privacy
+- Terms of service: https://migration.letvarsolution.com/terms
 - Support email: info@letvarsolution.com
   (Replace the sslip.io URLs if you move to your own domain.)
 
