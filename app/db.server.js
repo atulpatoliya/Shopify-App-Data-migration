@@ -49,7 +49,33 @@ const ready = (async () => {
     last_run_at TEXT,
     last_status TEXT
   )`);
+  await run(`CREATE TABLE IF NOT EXISTS shop_settings (
+    shop TEXT NOT NULL,
+    name TEXT NOT NULL,
+    value_json TEXT,
+    PRIMARY KEY (shop, name)
+  )`);
 })();
+
+// ── Per-shop settings (shared by all staff and browsers) ───────────────────
+export async function getSetting(shop, name) {
+  await ready;
+  const row = await get("SELECT value_json FROM shop_settings WHERE shop = ? AND name = ?", [shop, name]);
+  try {
+    return row?.value_json ? JSON.parse(row.value_json) : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function saveSetting(shop, name, value) {
+  await ready;
+  await run(
+    `INSERT INTO shop_settings (shop, name, value_json) VALUES (?, ?, ?)
+     ON CONFLICT(shop, name) DO UPDATE SET value_json = excluded.value_json`,
+    [shop, name, JSON.stringify(value)],
+  );
+}
 
 const now = () => new Date().toISOString();
 
@@ -135,4 +161,5 @@ export async function deleteShopData(shop) {
   await run("DELETE FROM import_backups WHERE job_id IN (SELECT id FROM import_jobs WHERE shop = ?)", [shop]);
   await run("DELETE FROM import_jobs WHERE shop = ?", [shop]);
   await run("DELETE FROM export_schedules WHERE shop = ?", [shop]);
+  await run("DELETE FROM shop_settings WHERE shop = ?", [shop]);
 }

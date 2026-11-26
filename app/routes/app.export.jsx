@@ -292,7 +292,7 @@ export default function ExportPage() {
               Excel (.xlsx) — choose your columns, edit and import back
             </s-choice>
             <s-choice value="shopify_csv" {...(format === "shopify_csv" ? { selected: true } : {})}>
-              Shopify CSV (.csv) — Shopify&apos;s standard product format, to move products to another store
+              Shopify CSV (.csv) — Shopify&apos;s standard product format, to move your products to another store you own
             </s-choice>
           </s-choice-list>
         </s-stack>

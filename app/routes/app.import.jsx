@@ -848,7 +848,7 @@ export default function ImportPage() {
         <s-unordered-list>
           <s-list-item>Empty cells are ignored, so existing values are kept.</s-list-item>
           <s-list-item>Variants are matched by SKU, then by Variant Title.</s-list-item>
-          <s-list-item>Shopify CSV files from other stores work too.</s-list-item>
+          <s-list-item>Shopify CSV files exported from your own Shopify stores work too.</s-list-item>
           <s-list-item>{existingProducts.length.toLocaleString()} store products available for matching.</s-list-item>
         </s-unordered-list>
       </s-section>

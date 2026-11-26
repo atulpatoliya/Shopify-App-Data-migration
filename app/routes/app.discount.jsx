@@ -4,6 +4,10 @@ import { useLoaderData, useFetcher } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { appApiKey, authenticate, vipBlockUrl } from "../shopify.server";
+import { getSetting, saveSetting } from "../db.server";
+
+const VIP_SETTINGS_KEY = "vip_discount_settings";
+const VIP_SETTING_FIELDS = ["discountPercent", "vipTag", "vipSegmentId", "startsAt", "endsAt", "fnPercent"];
 
 const VIP_FUNCTION_HANDLE = "vip-product-discount";
 const VIP_AUTO_TITLE = "VIP-AUTO-FUNCTION";
@@ -196,8 +200,15 @@ function computeTargetAndFixedDiscount(price, compareAtPrice, percent) {
   };
 }
 
+// Saving form settings must not reload the whole product list.
+export const shouldRevalidate = ({ formData, defaultShouldRevalidate }) => {
+  if (formData?.get("_action") === "save_settings") return false;
+  return defaultShouldRevalidate;
+};
+
 export const loader = async ({ request }) => {
-  const { admin } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
+  const savedSettings = await getSetting(session.shop, VIP_SETTINGS_KEY).catch(() => null);
   let hasNextPage = true;
   let after = null;
   const allProducts = [];
@@ -223,7 +234,7 @@ export const loader = async ({ request }) => {
     }
   } catch (err) {
     console.error("Loader Error:", err.message);
-    return { products: [], error: err.message };
+    return { products: [], error: err.message, savedSettings };
   }
 
   const normalizedProducts = allProducts
@@ -309,14 +320,30 @@ export const loader = async ({ request }) => {
     console.warn("Shop currency load skipped:", err.message);
   }
 
-  return { products: normalizedProducts, vipActiveByProduct, vipAutoDiscountInfo, currencyCode, addBlockUrl: vipBlockUrl(appApiKey) };
+  return { products: normalizedProducts, vipActiveByProduct, vipAutoDiscountInfo, currencyCode, addBlockUrl: vipBlockUrl(appApiKey), savedSettings };
 };
 
 export const action = async ({ request }) => {
   try {
-    const { admin } = await authenticate.admin(request);
+    const { admin, session } = await authenticate.admin(request);
     const formData = await request.formData();
     const _action = formData.get("_action");
+
+    // ── Save form settings for this shop ──────────────────────────────────
+    if (_action === "save_settings") {
+      let parsed = {};
+      try {
+        parsed = JSON.parse(String(formData.get("settings") || "{}"));
+      } catch {
+        return { _action, ok: false, errors: [{ message: "Invalid settings" }] };
+      }
+      const clean = {};
+      for (const key of VIP_SETTING_FIELDS) {
+        if (parsed[key] !== undefined) clean[key] = String(parsed[key]).slice(0, 200);
+      }
+      await saveSetting(session.shop, VIP_SETTINGS_KEY, clean);
+      return { _action, ok: true };
+    }
 
     // ── Configure VIP Function auto-discount ───────────────────────────────
     if (_action === "configure_function") {
@@ -572,18 +599,22 @@ export default function DiscountPage() {
     currencyCode = "USD",
     error: loaderError,
     addBlockUrl,
+    savedSettings,
   } = useLoaderData() || {};
   const fetcher = useFetcher();
   const fnFetcher = useFetcher();
+  const settingsFetcher = useFetcher();
   const shopify = useAppBridge();
 
-  const [discountPercent, setDiscountPercent] = useState("25");
-  const [vipTag, setVipTag] = useState(VIP_DEFAULT_TAG);
-  const [vipSegmentId, setVipSegmentId] = useState("");
-  const [startsAt, setStartsAt] = useState("");
-  const [endsAt, setEndsAt] = useState("");
+  // Settings are stored per shop on the server, so every browser and staff member sees them.
+  const s0 = savedSettings || {};
+  const [discountPercent, setDiscountPercent] = useState(s0.discountPercent ?? "25");
+  const [vipTag, setVipTag] = useState(s0.vipTag ?? VIP_DEFAULT_TAG);
+  const [vipSegmentId, setVipSegmentId] = useState(s0.vipSegmentId ?? "");
+  const [startsAt, setStartsAt] = useState(s0.startsAt ?? "");
+  const [endsAt, setEndsAt] = useState(s0.endsAt ?? "");
   const [selected, setSelected] = useState({});
-  const [fnPercent, setFnPercent] = useState("");
+  const [fnPercent, setFnPercent] = useState(s0.fnPercent ?? "");
   const [search, setSearch] = useState("");
   const [showManual, setShowManual] = useState(false);
 
@@ -596,30 +627,16 @@ export default function DiscountPage() {
     }
   }, [currencyCode]);
 
-  // Restore saved settings from localStorage on mount (client-only)
+  // Save settings to the server (debounced) whenever they change.
+  const settingsJson = JSON.stringify({ discountPercent, vipTag, vipSegmentId, startsAt, endsAt, fnPercent });
+  const initialSettingsJson = useMemo(() => settingsJson, []); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem("vip_discount_settings");
-      if (saved) {
-        const s = JSON.parse(saved);
-        if (s.discountPercent !== undefined) setDiscountPercent(s.discountPercent);
-        if (s.vipTag !== undefined) setVipTag(s.vipTag);
-        if (s.vipSegmentId !== undefined) setVipSegmentId(s.vipSegmentId);
-        if (s.startsAt !== undefined) setStartsAt(s.startsAt);
-        if (s.endsAt !== undefined) setEndsAt(s.endsAt);
-        if (s.fnPercent !== undefined) setFnPercent(s.fnPercent);
-      }
-    } catch (_e) { /* ignore */ }
-  }, []);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(
-        "vip_discount_settings",
-        JSON.stringify({ discountPercent, vipTag, vipSegmentId, startsAt, endsAt, fnPercent }),
-      );
-    } catch (_e) { /* ignore */ }
-  }, [discountPercent, vipTag, vipSegmentId, startsAt, endsAt, fnPercent]);
+    if (settingsJson === initialSettingsJson) return undefined;
+    const t = setTimeout(() => {
+      settingsFetcher.submit({ _action: "save_settings", settings: settingsJson }, { method: "post" });
+    }, 800);
+    return () => clearTimeout(t);
+  }, [settingsJson]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Toasts for results
   useEffect(() => {

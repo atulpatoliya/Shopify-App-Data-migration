@@ -1,5 +1,5 @@
 import { redirect, Form, useLoaderData } from "react-router";
-import { login } from "../../shopify.server";
+import { login, PLAN_LIMITS_ENABLED } from "../../shopify.server";
 import styles from "./styles.module.css";
 
 export const loader = async ({ request }) => {
@@ -9,7 +9,8 @@ export const loader = async ({ request }) => {
     throw redirect(`/app?${url.searchParams.toString()}`);
   }
 
-  return { showForm: Boolean(login) };
+  // App Store apps must not ask merchants to type their shop domain.
+  return { showForm: Boolean(login) && !PLAN_LIMITS_ENABLED };
 };
 
 export default function App() {

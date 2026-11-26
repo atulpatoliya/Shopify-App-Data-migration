@@ -22,7 +22,7 @@ const FAQ = [
   },
   {
     q: "Can I import a Shopify product CSV?",
-    a: "Yes. Files in Shopify's product CSV format, for example from another store, are detected automatically. You can also export in that format.",
+    a: "Yes. Files in Shopify's product CSV format, for example exported from another store you own, are detected automatically. You can also export in that format.",
   },
   {
     q: "How do VIP customers get their price?",
